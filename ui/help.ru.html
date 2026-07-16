@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Справка — Автомойки рядом</title>
+  <style>
+    body { font-family: system-ui, sans-serif; line-height: 1.55; color: #1e293b; margin: 0; padding: 1.25rem; max-width: 42rem; }
+    h1 { font-size: 1.15rem; margin: 0 0 0.75rem; }
+    h2 { font-size: 0.95rem; margin: 1.25rem 0 0.5rem; }
+    p, li { font-size: 0.875rem; }
+    code { background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 0.25rem; }
+    .wm-help-lang { font-size: 0.8rem; margin: 0 0 1rem; color: #64748b; }
+    .wm-help-lang a { color: #0ea5e9; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <p class="wm-help-lang"><a href="help.html">English</a> · <strong>Русский</strong></p>
+  <h1>Автомойки рядом</h1>
+  <p>Отправляет мойки CRM на публичную карту через <code>/api/v1/integration/*</code>.</p>
+
+  <h2>Настройка</h2>
+  <ol>
+    <li>Возьмите Owner API токен в кабинете владельца на сайте.</li>
+    <li>Укажите координаты по умолчанию (в CRM только текстовый адрес).</li>
+    <li>При необходимости задайте готовые связи CRM→сайт в <code>wash_mapping</code>.</li>
+    <li>Запустите модуль.</li>
+  </ol>
+
+  <h2>Цены</h2>
+  <p>Для каждого кода режима модуль читает <code>posts.settings.modePrices</code> у всех постов мойки и отправляет <strong>максимальную</strong> цену. Названия — из <code>/api/crm/work-modes</code>.</p>
+
+  <h2>Занятость</h2>
+  <p>Telemetry с постами уходит каждый цикл (≥ 60 с). Цены обновляются через PATCH только при изменении контента, чтобы не гонять мойку на модерацию каждую минуту.</p>
+
+  <h2>Новости и акции</h2>
+  <p>Из «Публикаций» CRM: <code>news</code>/<code>general</code> → новости, <code>promotion</code> → акции. Только записи со статусом scheduled/published и наступившим <code>publishedAt</code>.</p>
+</body>
+</html>
