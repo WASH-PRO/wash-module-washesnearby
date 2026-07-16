@@ -15,10 +15,10 @@
       accent: '#0ea5e9',
       refreshInterval: 12000,
       title: { ru: 'Автомойки рядом', en: 'Washes Nearby' },
-      subtitle: {
-        ru: 'Создаёт мойки на сайте «Автомойки рядом» и синхронизирует цены, занятость постов, новости и акции.',
-        en: 'Creates washes on Washes Nearby and syncs prices, post occupancy, news and promotions.',
-      },
+        subtitle: {
+          ru: 'Публикует мойки на сайт «Автомойки рядом» по UUID (mapsExternalId): цены, занятость постов, новости и акции.',
+          en: 'Publishes washes to Washes Nearby using CRM UUID (mapsExternalId): prices, post occupancy, news and promotions.',
+        },
       settingsHtml: `
         <div class="wm-field wm-field--full">
           <label class="wm-field-label" for="owner_api_token">${WashModule.t({ ru: 'Owner API токен', en: 'Owner API token' })}</label>

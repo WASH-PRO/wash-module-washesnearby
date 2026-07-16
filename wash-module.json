@@ -5,10 +5,10 @@
     "en": "Washes Nearby"
   },
   "description": {
-    "ru": "Создаёт мойки и адрес на сайте «Автомойки рядом», синхронизирует цены (макс. по постам), занятость, новости и акции.",
-    "en": "Creates washes on Washes Nearby, syncs max mode prices, post occupancy, news and promotions."
+    "ru": "Создаёт мойки на сайте «Автомойки рядом» по UUID (mapsExternalId), синхронизирует цены (макс. по постам), занятость, новости и акции.",
+    "en": "Creates washes on Washes Nearby using CRM UUID (mapsExternalId); syncs max mode prices, post occupancy, news and promotions."
   },
-  "version": "1.0.3",
+  "version": "1.0.4",
   "author": "WASH-PRO",
   "license": "MIT",
   "category": "publishing",

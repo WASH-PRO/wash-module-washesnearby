@@ -11,6 +11,21 @@
 3. Синхронизирует **занятость постов** через telemetry (`free` / `busy` / `broken`)
 4. Отправляет последние **новости** и **акции** из раздела CRM «Публикации»
 
+## UUID CRM ↔ `external_id` на сайте
+
+У каждой мойки в CRM есть поле **`mapsExternalId`** (UUID v4). Модуль передаёт его на сайт как Owner API **`external_id`**:
+
+| Шаг | Что происходит |
+|-----|----------------|
+| Создание мойки в CRM | Dashboard назначает `mapsExternalId` |
+| Старые мойки | `init-seed` дописывает UUID, если поля нет |
+| Синхронизация модуля | Ищет / создаёт / обновляет мойку на сайте по этому UUID |
+| Вызовы API | `PATCH` и telemetry идут как `ext:{uuid}` |
+
+CRM **не зависит** от числового id мойки на сайте. Файл `data/wash_mapping.json` — только кэш.
+
+Если у мойки нет `mapsExternalId`, модуль пропускает её с ошибкой — обновите CRM / выполните `init-seed` или откройте мойку в Dashboard и сохраните.
+
 ## Настройки
 
 | Параметр | Описание |
@@ -19,33 +34,22 @@
 | `maps_api_base` | Базовый URL API (по умолчанию punycode `https://xn----7sb0aeimehj.xn--p1ai` = мойка-про.рф). Сайт принимает Owner API по HTTP/2 — модуль вызывает его через `curl --http2`. |
 | `default_latitude` / `default_longitude` / `default_city` | Для создания мойки (в CRM только текстовый адрес) |
 | `wash_coords` | JSON по мойкам: `{"crmId":{"lat":55.16,"lng":61.4,"city":"…"}}` |
-| `wash_mapping` | Предварительная связь: `{"crmId": 12}` → id мойки на сайте |
+| `wash_mapping` | Опциональный кэш: `{"crmId": 12}` → id мойки на сайте |
 | `wash_id` | Только одна мойка CRM (пусто = все) |
 | `poll_interval` | Секунды (60–120). На сайте мойка offline без телеметрии ~3 минуты; API принимает telemetry ≤ 1/мин. |
 | `news_limit` | Сколько последних новостей/акций отправлять |
-
-## Как сопоставить мойку заранее
-
-В Integration API мойка связывается через **`external_id` = id мойки CRM**. Модуль:
-
-1. При создании передаёт `external_id`
-2. Ищет уже существующую мойку по `?external_id=`
-3. Для старых моек без поля — делает `PATCH` и выставляет `external_id`
-4. Дальше ходит в API как `ext:{crmWashId}` (телеметрия/patch)
-
-Дополнительно можно задать `wash_mapping` вручную (`{"crmId": 12}`), если мойка уже есть на сайте без CRM id.
 
 ## Установка
 
 Dashboard → Автоматизация → Модули → **Автомойки рядом** → Установить → Настройки → Запустить.
 
-Нужен PyOrchestrator (`PYORCHESTRATOR_ENABLED=true`).
+Нужен PyOrchestrator (`PYORCHESTRATOR_ENABLED=true`) и UUID у моек CRM (`mapsExternalId`).
 
 ## Файлы данных
 
 | Файл | Назначение |
 |------|------------|
-| `data/wash_mapping.json` | id мойки CRM → id на сайте |
+| `data/wash_mapping.json` | Опциональный кэш id CRM → числовой id на сайте |
 | `data/sync_state.json` | отпечатки контента и время последней telemetry |
 | `data/last_snapshot.json` | снимок для UI |
 | `data/settings.json` | настройки модуля |

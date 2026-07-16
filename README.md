@@ -11,6 +11,21 @@ WASH PRO CRM module: sync car washes to **Washes Nearby** ([Owner Integration AP
 3. Syncs **post occupancy** via telemetry (`free` / `busy` / `broken`)
 4. Syncs latest **news** and **promotions** from CRM Publications (`info-messages`)
 
+## CRM UUID ↔ site `external_id`
+
+Each CRM wash has **`mapsExternalId`** (UUID v4). The module sends it to the site as Owner API **`external_id`**:
+
+| Step | What happens |
+|------|----------------|
+| Create wash in CRM | Dashboard assigns `mapsExternalId` |
+| Existing washes | `init-seed` backfills missing UUIDs |
+| Module sync | Looks up / creates / patches site wash by that UUID |
+| API calls | `PATCH` / telemetry use `ext:{uuid}` |
+
+CRM does **not** need the site’s numeric wash id. The module may keep `data/wash_mapping.json` as a cache only.
+
+If a wash has no `mapsExternalId`, the module skips it with an error — update CRM / run `init-seed`, or open the wash in Dashboard and save.
+
 ## Settings
 
 | Key | Description |
@@ -19,33 +34,22 @@ WASH PRO CRM module: sync car washes to **Washes Nearby** ([Owner Integration AP
 | `maps_api_base` | API base URL (default punycode `https://xn----7sb0aeimehj.xn--p1ai` = мойка-про.рф). Owner API works over HTTP/2 — the module calls it via `curl --http2`. |
 | `default_latitude` / `default_longitude` / `default_city` | Used when creating a wash (CRM has address text only) |
 | `wash_coords` | Optional JSON per CRM wash: `{"crmId":{"lat":55.16,"lng":61.4,"city":"…"}}` |
-| `wash_mapping` | Optional pre-link: `{"crmId": 12}` → site wash id `12` |
+| `wash_mapping` | Optional cache: `{"crmId": 12}` → site wash id `12` |
 | `wash_id` | Sync only one CRM wash (empty = all) |
 | `poll_interval` | Seconds (60–120). Site marks wash offline without telemetry after ~3 min; API accepts telemetry ≤ 1/min. |
 | `news_limit` | Max news / promotions per wash |
-
-## Mapping CRM wash ↔ site wash
-
-The Integration API links washes via **`external_id` = CRM wash id**. The module:
-
-1. Sends `external_id` on create
-2. Looks up existing washes with `?external_id=`
-3. Patches older washes that are missing `external_id`
-4. Calls patch/telemetry as `ext:{crmWashId}`
-
-You can still set `wash_mapping` manually (`{"crmId": 12}`) if the wash already exists on the site without a CRM id.
 
 ## Install
 
 Dashboard → Automation → Modules → **Washes Nearby** → Install → Settings → Start.
 
-Requires PyOrchestrator (`PYORCHESTRATOR_ENABLED=true`).
+Requires PyOrchestrator (`PYORCHESTRATOR_ENABLED=true`) and CRM washes with `mapsExternalId`.
 
 ## Data files
 
 | File | Purpose |
 |------|---------|
-| `data/wash_mapping.json` | CRM wash id → site wash id |
-| `data/sync_state.json` | Content fingerprints + last telemetry time |
-| `data/last_snapshot.json` | UI overview snapshot |
+| `data/wash_mapping.json` | Optional CRM id → site numeric id cache |
+| `data/sync_state.json` | Content fingerprints and last telemetry time |
+| `data/last_snapshot.json` | Snapshot for UI |
 | `data/settings.json` | Module settings |

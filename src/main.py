@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -410,13 +411,18 @@ class MapsClient:
         return self.request("PUT", f"/api/v1/integration/washes/{wash_ref}/telemetry", body)
 
 
-def maps_wash_ref(crm_wash_id: str) -> str:
-    """Prefer ext:{crmId} so API paths stay stable even when CRM ids are numeric."""
-    return f"ext:{crm_wash_id}"
+def maps_wash_ref(external_id: str) -> str:
+    """Prefer ext:{uuid} so API paths stay stable."""
+    return f"ext:{external_id}"
+
+
+def wash_maps_uuid(wash: dict) -> str:
+    """CRM mapsExternalId (UUID) used as Owner API external_id."""
+    return str(wash.get("mapsExternalId") or wash.get("maps_external_id") or "").strip()
 
 
 def load_mapping(settings: dict[str, Any]) -> dict[str, int]:
-    """crmWashId → remote numeric id."""
+    """crmWashId → remote numeric id (cache only; identity is mapsExternalId UUID)."""
     mapping: dict[str, int] = {}
     file_map = load_json(os.path.join(DATA_DIR, MAPPING_FILE), {})
     if isinstance(file_map, dict):
@@ -629,42 +635,59 @@ def ensure_remote_wash(
     posts_payload: list[dict],
     service_modes: list[dict],
     wash_state: dict[str, Any],
-) -> tuple[int, str]:
-    """Return (platformId, apiRef). apiRef prefers ext:{crmId} once external_id is set."""
+) -> tuple[int, str, str]:
+    """
+    Return (platformId, apiRef, externalUuid).
+
+    Identity on the maps site is CRM mapsExternalId (UUID) → Owner API external_id.
+    """
     wid = ref_id(wash)
-    ext_ref = maps_wash_ref(wid)
+    external_uuid = wash_maps_uuid(wash)
+    if not external_uuid:
+        raise ValueError(
+            f"У мойки CRM {wid} нет mapsExternalId (UUID). "
+            "Обновите CRM / выполните init-seed или откройте мойку в Dashboard и сохраните."
+        )
+    try:
+        uuid.UUID(external_uuid)
+    except ValueError as err:
+        raise ValueError(f"Некорректный mapsExternalId у мойки CRM {wid}: {external_uuid}") from err
+
+    ext_ref = maps_wash_ref(external_uuid)
 
     existing = None
     try:
-        existing = client.find_by_external_id(wid)
+        existing = client.find_by_external_id(external_uuid)
     except Exception as err:  # noqa: BLE001
-        log(f"lookup by external_id crm={wid}: {err}")
+        log(f"lookup by external_id uuid={external_uuid}: {err}")
 
     if existing and existing.get("id") is not None:
         remote_id = int(existing["id"])
         mapping[wid] = remote_id
         save_mapping(mapping)
         wash_state["externalIdSet"] = True
-        return remote_id, ext_ref
+        wash_state["mapsExternalId"] = external_uuid
+        return remote_id, ext_ref, external_uuid
 
     if wid in mapping:
         remote_id = mapping[wid]
-        if not wash_state.get("externalIdSet"):
+        if not wash_state.get("externalIdSet") or wash_state.get("mapsExternalId") != external_uuid:
             try:
-                client.patch_wash(remote_id, {"external_id": wid})
+                client.patch_wash(remote_id, {"external_id": external_uuid})
                 wash_state["externalIdSet"] = True
-                log(f"set external_id crm={wid} on maps={remote_id}")
-                return remote_id, ext_ref
+                wash_state["mapsExternalId"] = external_uuid
+                log(f"set external_id uuid={external_uuid} on maps={remote_id} crm={wid}")
+                return remote_id, ext_ref, external_uuid
             except Exception as err:  # noqa: BLE001
                 log(f"set external_id failed crm={wid} maps={remote_id}: {err}")
-                return remote_id, str(remote_id)
-        return remote_id, ext_ref
+                return remote_id, str(remote_id), external_uuid
+        return remote_id, ext_ref, external_uuid
 
     lat, lng, city = resolve_geo(wash, settings, coords_map)
     wash_type = pick_str(settings, "wash_type", "WASH_TYPE", "self_service") or "self_service"
     body: dict[str, Any] = {
         "name": str(wash.get("name") or f"Мойка {wid}"),
-        "external_id": wid,
+        "external_id": external_uuid,
         "address": str(wash.get("address") or "Адрес не указан"),
         "city": city or None,
         "latitude": lat,
@@ -683,8 +706,9 @@ def ensure_remote_wash(
     mapping[wid] = remote_id
     save_mapping(mapping)
     wash_state["externalIdSet"] = True
-    log(f"created remote wash crm={wid} → maps={remote_id} external_id={wid}")
-    return remote_id, ext_ref
+    wash_state["mapsExternalId"] = external_uuid
+    log(f"created remote wash crm={wid} → maps={remote_id} external_id={external_uuid}")
+    return remote_id, ext_ref, external_uuid
 
 
 def run_cycle() -> dict:
@@ -749,7 +773,7 @@ def run_cycle() -> dict:
             news, promos = build_news_and_promos(messages, wid, now, news_limit)
 
             wash_state = sync_state.get(wid) if isinstance(sync_state.get(wid), dict) else {}
-            remote_id, wash_ref = ensure_remote_wash(
+            remote_id, wash_ref, external_uuid = ensure_remote_wash(
                 client,
                 wash,
                 mapping,
@@ -845,7 +869,7 @@ def run_cycle() -> dict:
                 {
                     "crmWashId": wid,
                     "remoteWashId": remote_id,
-                    "externalId": wid,
+                    "externalId": external_uuid,
                     "mapsRef": wash_ref,
                     "name": wash.get("name"),
                     "modes": len(service_modes),
