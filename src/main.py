@@ -392,11 +392,27 @@ class MapsClient:
             raise RuntimeError("create wash: missing id in response")
         return data
 
-    def patch_wash(self, remote_id: int | str, body: dict) -> Any:
-        return self.request("PATCH", f"/api/v1/integration/washes/{remote_id}", body)
+    def find_by_external_id(self, external_id: str) -> dict | None:
+        query = urllib.parse.urlencode({"external_id": external_id, "per_page": 5})
+        data = self.request("GET", f"/api/v1/integration/washes?{query}")
+        if isinstance(data, list):
+            for row in data:
+                if isinstance(row, dict) and str(row.get("external_id") or "") == str(external_id):
+                    return row
+            if data and isinstance(data[0], dict):
+                return data[0]
+        return None
 
-    def put_telemetry(self, remote_id: int | str, body: dict) -> Any:
-        return self.request("PUT", f"/api/v1/integration/washes/{remote_id}/telemetry", body)
+    def patch_wash(self, wash_ref: int | str, body: dict) -> Any:
+        return self.request("PATCH", f"/api/v1/integration/washes/{wash_ref}", body)
+
+    def put_telemetry(self, wash_ref: int | str, body: dict) -> Any:
+        return self.request("PUT", f"/api/v1/integration/washes/{wash_ref}/telemetry", body)
+
+
+def maps_wash_ref(crm_wash_id: str) -> str:
+    """Prefer ext:{crmId} so API paths stay stable even when CRM ids are numeric."""
+    return f"ext:{crm_wash_id}"
 
 
 def load_mapping(settings: dict[str, Any]) -> dict[str, int]:
@@ -612,15 +628,43 @@ def ensure_remote_wash(
     coords_map: dict[str, dict[str, Any]],
     posts_payload: list[dict],
     service_modes: list[dict],
-) -> int:
+    wash_state: dict[str, Any],
+) -> tuple[int, str]:
+    """Return (platformId, apiRef). apiRef prefers ext:{crmId} once external_id is set."""
     wid = ref_id(wash)
+    ext_ref = maps_wash_ref(wid)
+
+    existing = None
+    try:
+        existing = client.find_by_external_id(wid)
+    except Exception as err:  # noqa: BLE001
+        log(f"lookup by external_id crm={wid}: {err}")
+
+    if existing and existing.get("id") is not None:
+        remote_id = int(existing["id"])
+        mapping[wid] = remote_id
+        save_mapping(mapping)
+        wash_state["externalIdSet"] = True
+        return remote_id, ext_ref
+
     if wid in mapping:
-        return mapping[wid]
+        remote_id = mapping[wid]
+        if not wash_state.get("externalIdSet"):
+            try:
+                client.patch_wash(remote_id, {"external_id": wid})
+                wash_state["externalIdSet"] = True
+                log(f"set external_id crm={wid} on maps={remote_id}")
+                return remote_id, ext_ref
+            except Exception as err:  # noqa: BLE001
+                log(f"set external_id failed crm={wid} maps={remote_id}: {err}")
+                return remote_id, str(remote_id)
+        return remote_id, ext_ref
 
     lat, lng, city = resolve_geo(wash, settings, coords_map)
     wash_type = pick_str(settings, "wash_type", "WASH_TYPE", "self_service") or "self_service"
     body: dict[str, Any] = {
         "name": str(wash.get("name") or f"Мойка {wid}"),
+        "external_id": wid,
         "address": str(wash.get("address") or "Адрес не указан"),
         "city": city or None,
         "latitude": lat,
@@ -631,7 +675,6 @@ def ensure_remote_wash(
         "posts": posts_payload or [{"number": "1", "status": "free"}],
         "service_modes": service_modes,
     }
-    # drop None city
     if not body.get("city"):
         body.pop("city", None)
 
@@ -639,8 +682,9 @@ def ensure_remote_wash(
     remote_id = int(created.get("id"))
     mapping[wid] = remote_id
     save_mapping(mapping)
-    log(f"created remote wash crm={wid} → maps={remote_id}")
-    return remote_id
+    wash_state["externalIdSet"] = True
+    log(f"created remote wash crm={wid} → maps={remote_id} external_id={wid}")
+    return remote_id, ext_ref
 
 
 def run_cycle() -> dict:
@@ -704,7 +748,8 @@ def run_cycle() -> dict:
             status_counts = count_post_statuses(posts_payload)
             news, promos = build_news_and_promos(messages, wid, now, news_limit)
 
-            remote_id = ensure_remote_wash(
+            wash_state = sync_state.get(wid) if isinstance(sync_state.get(wid), dict) else {}
+            remote_id, wash_ref = ensure_remote_wash(
                 client,
                 wash,
                 mapping,
@@ -712,6 +757,7 @@ def run_cycle() -> dict:
                 coords_map,
                 posts_payload,
                 service_modes,
+                wash_state,
             )
 
             patch_body: dict[str, Any] = {}
@@ -739,7 +785,6 @@ def run_cycle() -> dict:
                     {k: v for k, v in item.items() if v is not None} for item in promos
                 ]
 
-            wash_state = sync_state.get(wid) if isinstance(sync_state.get(wid), dict) else {}
             fp = content_fingerprint(
                 {
                     "card": {k: patch_body[k] for k in ("name", "address", "description", "latitude", "longitude", "city") if k in patch_body},
@@ -751,11 +796,11 @@ def run_cycle() -> dict:
             patched = False
             if patch_body and fp != wash_state.get("contentFp"):
                 try:
-                    client.patch_wash(remote_id, patch_body)
+                    client.patch_wash(wash_ref, patch_body)
                     wash_state["contentFp"] = fp
                     wash_state["lastPatchAt"] = now.isoformat()
                     patched = True
-                    log(f"patched maps={remote_id} crm={wid}")
+                    log(f"patched maps={remote_id} ref={wash_ref} crm={wid}")
                 except Exception as patch_err:  # noqa: BLE001
                     err_text = str(patch_err)
                     errors.append({"crmWashId": wid, "error": f"patch: {err_text}", "name": wash.get("name")})
@@ -771,7 +816,7 @@ def run_cycle() -> dict:
                 }
                 try:
                     # Prices only via PATCH to avoid re-moderation every minute
-                    telemetry_result = client.put_telemetry(remote_id, tel_body)
+                    telemetry_result = client.put_telemetry(wash_ref, tel_body)
                     ignored = bool(
                         isinstance(telemetry_result, dict) and telemetry_result.get("ignored")
                     )
@@ -783,7 +828,7 @@ def run_cycle() -> dict:
                         else None
                     )
                     log(
-                        f"telemetry maps={remote_id} ignored={ignored} "
+                        f"telemetry maps={remote_id} ref={wash_ref} ignored={ignored} "
                         f"busy={status_counts['busy']} free={status_counts['free']} "
                         f"broken={status_counts['broken']} load={load}"
                     )
@@ -800,6 +845,8 @@ def run_cycle() -> dict:
                 {
                     "crmWashId": wid,
                     "remoteWashId": remote_id,
+                    "externalId": wid,
+                    "mapsRef": wash_ref,
                     "name": wash.get("name"),
                     "modes": len(service_modes),
                     "posts": len(posts_payload),

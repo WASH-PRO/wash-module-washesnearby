@@ -123,7 +123,7 @@
               `<li><strong>${WashModule.escapeHtml(String(r.name || r.crmWashId || '—'))}</strong>
                <span class="wm-field-hint">CRM ${WashModule.escapeHtml(String(r.crmWashId))} → сайт ${WashModule.escapeHtml(String(r.remoteWashId))}
                · занято ${WashModule.escapeHtml(String(r.busy ?? 0))} · свободно ${WashModule.escapeHtml(String(r.free ?? 0))}
-               · офлайн ${WashModule.escapeHtml(String(r.broken ?? 0))} · режимы ${WashModule.escapeHtml(String(r.modes ?? 0))}</span></li>`
+               · офлайн ${WashModule.escapeHtml(String(r.broken ?? 0))} · ext ${WashModule.escapeHtml(String(r.externalId || r.crmWashId || '—'))}</span></li>`
             ).join('')}</ul>`
           : `<p class="wm-field-hint">${WashModule.t({ ru: 'Пока нет результатов.', en: 'No results yet.' })}</p>`;
         const errors = Array.isArray(snap.recentErrors) ? snap.recentErrors : [];

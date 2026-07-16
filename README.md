@@ -26,11 +26,14 @@ WASH PRO CRM module: sync car washes to **Washes Nearby** ([Owner Integration AP
 
 ## Mapping CRM wash ↔ site wash
 
-The Integration API does **not** accept an external CRM id on create. Use one of:
+The Integration API links washes via **`external_id` = CRM wash id**. The module:
 
-1. **Automatic** — module creates the wash and stores `crmId → remoteId` in `data/wash_mapping.json`
-2. **Manual preset** — set `wash_mapping` in settings, e.g. `{"64f…": 3}` if the wash already exists on the site
-3. **Future improvement** — store `metadata.crm_wash_id` on the site API (not in the public validate set today)
+1. Sends `external_id` on create
+2. Looks up existing washes with `?external_id=`
+3. Patches older washes that are missing `external_id`
+4. Calls patch/telemetry as `ext:{crmWashId}`
+
+You can still set `wash_mapping` manually (`{"crmId": 12}`) if the wash already exists on the site without a CRM id.
 
 ## Install
 
