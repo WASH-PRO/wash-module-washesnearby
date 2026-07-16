@@ -16,7 +16,7 @@
 | Параметр | Описание |
 |----------|----------|
 | `owner_api_token` | Bearer-токен владельца (кабинет → API) |
-| `maps_api_base` | Базовый URL API (по умолчанию `https://мойка-про.рф`) |
+| `maps_api_base` | Базовый URL API (по умолчанию punycode `https://xn----7sb0aeimehj.xn--p1ai` = мойка-про.рф). Сайт принимает Owner API по HTTP/2 — модуль вызывает его через `curl --http2`. |
 | `default_latitude` / `default_longitude` / `default_city` | Для создания мойки (в CRM только текстовый адрес) |
 | `wash_coords` | JSON по мойкам: `{"crmId":{"lat":55.16,"lng":61.4,"city":"…"}}` |
 | `wash_mapping` | Предварительная связь: `{"crmId": 12}` → id мойки на сайте |

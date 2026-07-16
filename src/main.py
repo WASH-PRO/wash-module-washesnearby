@@ -6,6 +6,9 @@ import html
 import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -17,6 +20,8 @@ MODULE_ID = "washesnearby"
 LOG_PREFIX = "[washesnearby]"
 
 API_BASE = os.environ.get("API_BASE_URL", "http://dynamic-api:3001").rstrip("/")
+# Punycode form of https://мойка-про.рф — ASCII-safe default for HTTP clients.
+DEFAULT_MAPS_API_BASE = "https://xn----7sb0aeimehj.xn--p1ai"
 POST_ONLINE_SEC = 30
 MAPPING_FILE = "wash_mapping.json"
 SNAPSHOT_FILE = "last_snapshot.json"
@@ -218,40 +223,168 @@ def crm_list(path: str) -> list[dict]:
     return []
 
 
+def to_ascii_url(url: str) -> str:
+    """Encode IDN host to punycode — urllib Host headers must be latin-1."""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    if not host:
+        return url
+    try:
+        host_ascii = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return url
+    netloc = host_ascii
+    if parts.port:
+        netloc = f"{host_ascii}:{parts.port}"
+    if parts.username is not None:
+        user = parts.username
+        if parts.password is not None:
+            user = f"{user}:{parts.password}"
+        netloc = f"{user}@{netloc}"
+    return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def _parse_json_response(method: str, path: str, status: int, raw: str) -> Any:
+    compact = " ".join((raw or "").split())
+    if status < 200 or status >= 300:
+        raise RuntimeError(f"{method} {path} → HTTP {status}: {compact[:400]}")
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError as err:
+        raise RuntimeError(f"{method} {path}: invalid JSON: {compact[:200]}") from err
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{method} {path}: unexpected response")
+    if payload.get("success") is False:
+        error = payload.get("error") or {}
+        msg = error.get("message") if isinstance(error, dict) else str(error)
+        raise RuntimeError(f"{method} {path}: {msg or compact[:200]}")
+    return payload.get("data", payload)
+
+
+def maps_http_request(method: str, url: str, token: str, body: dict | None = None) -> Any:
+    """
+    Call Maps Owner API.
+
+    Production host (мойка-про.рф) serves the API correctly only over HTTP/2
+    (HTTP/1.1 hits a misconfigured Apache and returns 505). PyOrchestrator
+    runtime includes curl with HTTP/2; urllib is HTTP/1.1-only and is a fallback.
+    """
+    ascii_url = to_ascii_url(url)
+    path = urllib.parse.urlsplit(ascii_url).path or "/"
+    payload_bytes = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+
+    def via_curl(use_http2: bool) -> tuple[int, str]:
+        curl_bin = shutil.which("curl")
+        if not curl_bin:
+            raise RuntimeError("curl not found")
+        out_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                out_path = tmp.name
+            cmd = [
+                curl_bin,
+                "-sS",
+                "-o",
+                out_path,
+                "-w",
+                "%{http_code}",
+                "-X",
+                method,
+                "--max-time",
+                "60",
+            ]
+            if use_http2:
+                cmd.append("--http2")
+            for key, value in headers.items():
+                cmd.extend(["-H", f"{key}: {value}"])
+            if payload_bytes is not None:
+                cmd.extend(["--data-binary", "@-"])
+            cmd.append(ascii_url)
+            proc = subprocess.run(
+                cmd,
+                input=payload_bytes,
+                capture_output=True,
+                timeout=70,
+                check=False,
+            )
+            status_text = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+            try:
+                with open(out_path, encoding="utf-8", errors="replace") as fh:
+                    raw = fh.read()
+            except OSError:
+                raw = ""
+            if not status_text.isdigit():
+                err = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+                raise RuntimeError(err or f"curl exit {proc.returncode}")
+            return int(status_text), raw
+        finally:
+            if out_path:
+                try:
+                    os.unlink(out_path)
+                except OSError:
+                    pass
+
+    transport_errors: list[str] = []
+
+    if shutil.which("curl"):
+        for use_http2 in (True, False):
+            try:
+                status, raw = via_curl(use_http2)
+            except Exception as err:  # noqa: BLE001
+                transport_errors.append(str(err))
+                err_text = str(err).lower()
+                if use_http2 and ("http2" in err_text or "unsupported" in err_text):
+                    continue
+                break
+            if status == 505:
+                transport_errors.append(f"HTTP 505 (http2={use_http2})")
+                continue
+            return _parse_json_response(method, path, status, raw)
+
+    req = urllib.request.Request(
+        ascii_url,
+        data=payload_bytes,
+        method=method,
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8")
+            return _parse_json_response(method, path, getattr(resp, "status", 200) or 200, raw)
+    except urllib.error.HTTPError as err:
+        detail = " ".join(err.read().decode("utf-8", errors="replace").split())
+        if err.code == 505:
+            hint = "; ".join(transport_errors[:3])
+            raise RuntimeError(
+                f"{method} {path} → HTTP 505: сайт принимает Owner API только по HTTP/2. "
+                f"Нужен curl с HTTP/2 в runtime PyOrchestrator."
+                + (f" ({hint})" if hint else "")
+                + f" Ответ: {detail[:200]}"
+            ) from err
+        raise RuntimeError(f"{method} {path} → HTTP {err.code}: {detail[:400]}") from err
+    except Exception as err:
+        if transport_errors:
+            raise RuntimeError(
+                f"{method} {path}: {err}; curl attempts: {'; '.join(transport_errors[:3])}"
+            ) from err
+        raise
+
+
 class MapsClient:
     def __init__(self, base_url: str, token: str) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = to_ascii_url(base_url.rstrip("/"))
         self.token = token.strip()
 
     def request(self, method: str, path: str, body: dict | None = None) -> Any:
         if not self.token:
             raise ValueError("OWNER_API_TOKEN не задан")
         url = f"{self.base_url}{path}"
-        data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            method=method,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.token}",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as err:
-            detail = err.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{method} {path} → HTTP {err.code}: {detail[:500]}") from err
-
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"{method} {path}: unexpected response")
-        if payload.get("success") is False:
-            error = payload.get("error") or {}
-            msg = error.get("message") if isinstance(error, dict) else str(error)
-            raise RuntimeError(f"{method} {path}: {msg or payload}")
-        return payload.get("data", payload)
+        return maps_http_request(method, url, self.token, body)
 
     def create_wash(self, body: dict) -> dict:
         data = self.request("POST", "/api/v1/integration/washes", body)
@@ -509,8 +642,8 @@ def run_cycle() -> dict:
         settings,
         "maps_api_base",
         "MAPS_API_BASE",
-        "https://мойка-про.рф",
-    ) or "https://мойка-про.рф"
+        DEFAULT_MAPS_API_BASE,
+    ) or DEFAULT_MAPS_API_BASE
     sync_card = pick_str(settings, "sync_card", "SYNC_CARD", "1").lower() not in ("0", "false", "no")
     sync_prices = pick_str(settings, "sync_prices", "SYNC_PRICES", "1").lower() not in ("0", "false", "no")
     sync_news = pick_str(settings, "sync_news", "SYNC_NEWS", "1").lower() not in ("0", "false", "no")

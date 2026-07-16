@@ -16,7 +16,7 @@ WASH PRO CRM module: sync car washes to **Washes Nearby** ([Owner Integration AP
 | Key | Description |
 |-----|-------------|
 | `owner_api_token` | Owner API Bearer token (Owner cabinet → API) |
-| `maps_api_base` | API base URL (default `https://мойка-про.рф`) |
+| `maps_api_base` | API base URL (default punycode `https://xn----7sb0aeimehj.xn--p1ai` = мойка-про.рф). Owner API works over HTTP/2 — the module calls it via `curl --http2`. |
 | `default_latitude` / `default_longitude` / `default_city` | Used when creating a wash (CRM has address text only) |
 | `wash_coords` | Optional JSON per CRM wash: `{"crmId":{"lat":55.16,"lng":61.4,"city":"…"}}` |
 | `wash_mapping` | Optional pre-link: `{"crmId": 12}` → site wash id `12` |

@@ -27,7 +27,7 @@
         </div>
         <div class="wm-field wm-field--full">
           <label class="wm-field-label" for="maps_api_base">${WashModule.t({ ru: 'URL API', en: 'API URL' })}</label>
-          <input class="wm-input" id="maps_api_base" type="text" name="maps_api_base" placeholder="https://мойка-про.рф" />
+          <input class="wm-input" id="maps_api_base" type="text" name="maps_api_base" placeholder="https://xn----7sb0aeimehj.xn--p1ai" />
         </div>
         <div class="wm-field">
           <label class="wm-field-label" for="default_latitude">${WashModule.t({ ru: 'Широта', en: 'Latitude' })}</label>
@@ -85,7 +85,7 @@
         return settings;
       },
       applySettings(settings, form) {
-        form.maps_api_base.value = settings.maps_api_base ?? 'https://мойка-про.рф';
+        form.maps_api_base.value = settings.maps_api_base ?? 'https://xn----7sb0aeimehj.xn--p1ai';
         form.default_latitude.value = settings.default_latitude ?? 55.1644;
         form.default_longitude.value = settings.default_longitude ?? 61.4368;
         form.default_city.value = settings.default_city ?? '';
