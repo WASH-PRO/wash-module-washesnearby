@@ -522,6 +522,16 @@ def build_posts_payload(posts: list[dict], state_by_post: dict[str, dict]) -> li
     return result
 
 
+def count_post_statuses(posts_payload: list[dict]) -> dict[str, int]:
+    counts = {"free": 0, "busy": 0, "broken": 0}
+    for row in posts_payload:
+        status = str(row.get("status") or "broken")
+        if status not in counts:
+            status = "broken"
+        counts[status] += 1
+    return counts
+
+
 def message_active(message: dict, now: datetime) -> bool:
     status = str(message.get("status") or "").strip().lower()
     if status not in ("scheduled", "published"):
@@ -635,7 +645,8 @@ def ensure_remote_wash(
 
 def run_cycle() -> dict:
     settings = load_settings()
-    poll_interval = pick_int(settings, "poll_interval", "POLL_INTERVAL", 60, 60, 3600)
+    # Site marks wash offline if telemetry is older than ~3 minutes.
+    poll_interval = pick_int(settings, "poll_interval", "POLL_INTERVAL", 60, 60, 120)
     news_limit = pick_int(settings, "news_limit", "NEWS_LIMIT", 5, 1, 50)
     token = pick_str(settings, "owner_api_token", "OWNER_API_TOKEN", "")
     maps_base = pick_str(
@@ -680,6 +691,7 @@ def run_cycle() -> dict:
 
     results: list[dict] = []
     errors: list[dict] = []
+    totals = {"free": 0, "busy": 0, "broken": 0, "posts": 0}
 
     for wash in washes:
         wid = ref_id(wash)
@@ -689,6 +701,7 @@ def run_cycle() -> dict:
             wash_posts = [p for p in posts_all if ref_id(p.get("washId")) == wid]
             service_modes = build_service_modes(wash_posts, work_modes)
             posts_payload = build_posts_payload(wash_posts, state_by_post)
+            status_counts = count_post_statuses(posts_payload)
             news, promos = build_news_and_promos(messages, wid, now, news_limit)
 
             remote_id = ensure_remote_wash(
@@ -718,8 +731,13 @@ def run_cycle() -> dict:
             if sync_prices and service_modes:
                 patch_body["service_modes"] = service_modes
             if sync_news:
-                patch_body["news"] = news
-                patch_body["promotions"] = promos
+                # Avoid null published_at — some API validators reject null fields.
+                patch_body["news"] = [
+                    {k: v for k, v in item.items() if v is not None} for item in news
+                ]
+                patch_body["promotions"] = [
+                    {k: v for k, v in item.items() if v is not None} for item in promos
+                ]
 
             wash_state = sync_state.get(wid) if isinstance(sync_state.get(wid), dict) else {}
             fp = content_fingerprint(
@@ -732,31 +750,52 @@ def run_cycle() -> dict:
             )
             patched = False
             if patch_body and fp != wash_state.get("contentFp"):
-                # Avoid putting service_modes into every patch if only news changed —
-                # still full replace is required by API when present.
-                client.patch_wash(remote_id, patch_body)
-                wash_state["contentFp"] = fp
-                wash_state["lastPatchAt"] = now.isoformat()
-                patched = True
-                log(f"patched maps={remote_id} crm={wid}")
+                try:
+                    client.patch_wash(remote_id, patch_body)
+                    wash_state["contentFp"] = fp
+                    wash_state["lastPatchAt"] = now.isoformat()
+                    patched = True
+                    log(f"patched maps={remote_id} crm={wid}")
+                except Exception as patch_err:  # noqa: BLE001
+                    err_text = str(patch_err)
+                    errors.append({"crmWashId": wid, "error": f"patch: {err_text}", "name": wash.get("name")})
+                    log(f"patch error crm={wid}: {err_text}")
 
             telemetry_result = None
             last_tel = parse_dt(wash_state.get("lastTelemetryAt"))
-            can_tel = (not last_tel) or (now.timestamp() - last_tel.timestamp() >= 60)
+            can_tel = (not last_tel) or (now.timestamp() - last_tel.timestamp() >= 55)
             if sync_telemetry and posts_payload and can_tel:
                 tel_body: dict[str, Any] = {
                     "status": "open",
                     "posts": posts_payload,
                 }
-                # Prices only via PATCH to avoid re-moderation every minute
-                telemetry_result = client.put_telemetry(remote_id, tel_body)
-                wash_state["lastTelemetryAt"] = now.isoformat()
-                ignored = bool(
-                    isinstance(telemetry_result, dict) and telemetry_result.get("ignored")
-                )
-                log(f"telemetry maps={remote_id} ignored={ignored}")
+                try:
+                    # Prices only via PATCH to avoid re-moderation every minute
+                    telemetry_result = client.put_telemetry(remote_id, tel_body)
+                    ignored = bool(
+                        isinstance(telemetry_result, dict) and telemetry_result.get("ignored")
+                    )
+                    if not ignored:
+                        wash_state["lastTelemetryAt"] = now.isoformat()
+                    load = (
+                        telemetry_result.get("load")
+                        if isinstance(telemetry_result, dict)
+                        else None
+                    )
+                    log(
+                        f"telemetry maps={remote_id} ignored={ignored} "
+                        f"busy={status_counts['busy']} free={status_counts['free']} "
+                        f"broken={status_counts['broken']} load={load}"
+                    )
+                except Exception as tel_err:  # noqa: BLE001
+                    err_text = str(tel_err)
+                    errors.append({"crmWashId": wid, "error": f"telemetry: {err_text}", "name": wash.get("name")})
+                    log(f"telemetry error crm={wid}: {err_text}")
 
             sync_state[wid] = wash_state
+            for key in ("free", "busy", "broken"):
+                totals[key] += status_counts[key]
+            totals["posts"] += len(posts_payload)
             results.append(
                 {
                     "crmWashId": wid,
@@ -764,6 +803,9 @@ def run_cycle() -> dict:
                     "name": wash.get("name"),
                     "modes": len(service_modes),
                     "posts": len(posts_payload),
+                    "busy": status_counts["busy"],
+                    "free": status_counts["free"],
+                    "broken": status_counts["broken"],
                     "news": len(news),
                     "promotions": len(promos),
                     "patched": patched,
@@ -786,6 +828,10 @@ def run_cycle() -> dict:
         "crmWashCount": len(washes),
         "mappedCount": len(mapping),
         "syncedThisCycle": len(results),
+        "busy": totals["busy"],
+        "free": totals["free"],
+        "broken": totals["broken"],
+        "posts": totals["posts"],
         "mapping": mapping,
         "results": results,
         "recentErrors": errors[-8:],
@@ -797,12 +843,13 @@ def run_cycle() -> dict:
 def main() -> None:
     while True:
         settings = load_settings()
-        poll_interval = pick_int(settings, "poll_interval", "POLL_INTERVAL", 60, 60, 3600)
+        poll_interval = pick_int(settings, "poll_interval", "POLL_INTERVAL", 60, 60, 120)
         try:
             snap = run_cycle()
             log(
                 f"synced={snap['syncedThisCycle']} mapped={snap['mappedCount']} "
-                f"errors={len(snap.get('recentErrors') or [])}"
+                f"busy={snap.get('busy', 0)} free={snap.get('free', 0)} "
+                f"broken={snap.get('broken', 0)} errors={len(snap.get('recentErrors') or [])}"
             )
         except urllib.error.URLError as err:
             log(f"CRM API error: {err}")

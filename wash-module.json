@@ -8,7 +8,7 @@
     "ru": "Создаёт мойки и адрес на сайте «Автомойки рядом», синхронизирует цены (макс. по постам), занятость, новости и акции.",
     "en": "Creates washes on Washes Nearby, syncs max mode prices, post occupancy, news and promotions."
   },
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "WASH-PRO",
   "license": "MIT",
   "category": "publishing",
@@ -110,7 +110,7 @@
       },
       "default": 60,
       "min": 60,
-      "max": 3600
+      "max": 120
     },
     {
       "key": "news_limit",

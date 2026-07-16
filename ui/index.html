@@ -43,8 +43,8 @@
         </div>
         <div class="wm-field">
           <label class="wm-field-label" for="poll_interval">${WashModule.t({ ru: 'Интервал (сек)', en: 'Interval (sec)' })}</label>
-          <input class="wm-input" id="poll_interval" type="number" name="poll_interval" min="60" max="3600" />
-          <span class="wm-field-hint">${WashModule.t({ ru: 'Телеметрия на сайте — не чаще 1 раза в минуту.', en: 'Site telemetry accepts at most once per minute.' })}</span>
+          <input class="wm-input" id="poll_interval" type="number" name="poll_interval" min="60" max="120" />
+          <span class="wm-field-hint">${WashModule.t({ ru: 'Не больше 120 сек: на сайте мойка становится offline без телеметрии ~3 мин.', en: 'Max 120s: site marks wash offline without telemetry after ~3 min.' })}</span>
         </div>
         <div class="wm-field">
           <label class="wm-field-label" for="news_limit">${WashModule.t({ ru: 'Лимит новостей/акций', en: 'News/promo limit' })}</label>
@@ -103,13 +103,10 @@
       metrics(snap) {
         if (!snap || !snap.recordedAt) return [];
         return [
-          { label: WashModule.t({ ru: 'Синхронизировано', en: 'Synced' }), value: snap.syncedThisCycle ?? 0, accent: true },
+          { label: WashModule.t({ ru: 'Занято', en: 'Busy' }), value: snap.busy ?? 0, accent: true },
+          { label: WashModule.t({ ru: 'Свободно', en: 'Free' }), value: snap.free ?? 0 },
+          { label: WashModule.t({ ru: 'Офлайн', en: 'Broken' }), value: snap.broken ?? 0 },
           { label: WashModule.t({ ru: 'Связок', en: 'Mapped' }), value: snap.mappedCount ?? 0 },
-          { label: WashModule.t({ ru: 'Моек CRM', en: 'CRM washes' }), value: snap.crmWashCount ?? 0 },
-          {
-            label: WashModule.t({ ru: 'Токен', en: 'Token' }),
-            value: snap.configured ? WashModule.t({ ru: 'Да', en: 'Yes' }) : WashModule.t({ ru: 'Нет', en: 'No' }),
-          },
         ];
       },
       renderOverview(snap, status) {
@@ -125,7 +122,8 @@
           ? `<ul class="wm-list">${rows.map((r) =>
               `<li><strong>${WashModule.escapeHtml(String(r.name || r.crmWashId || '—'))}</strong>
                <span class="wm-field-hint">CRM ${WashModule.escapeHtml(String(r.crmWashId))} → сайт ${WashModule.escapeHtml(String(r.remoteWashId))}
-               · режимы ${WashModule.escapeHtml(String(r.modes ?? 0))} · посты ${WashModule.escapeHtml(String(r.posts ?? 0))}</span></li>`
+               · занято ${WashModule.escapeHtml(String(r.busy ?? 0))} · свободно ${WashModule.escapeHtml(String(r.free ?? 0))}
+               · офлайн ${WashModule.escapeHtml(String(r.broken ?? 0))} · режимы ${WashModule.escapeHtml(String(r.modes ?? 0))}</span></li>`
             ).join('')}</ul>`
           : `<p class="wm-field-hint">${WashModule.t({ ru: 'Пока нет результатов.', en: 'No results yet.' })}</p>`;
         const errors = Array.isArray(snap.recentErrors) ? snap.recentErrors : [];

@@ -21,7 +21,7 @@ WASH PRO CRM module: sync car washes to **Washes Nearby** ([Owner Integration AP
 | `wash_coords` | Optional JSON per CRM wash: `{"crmId":{"lat":55.16,"lng":61.4,"city":"…"}}` |
 | `wash_mapping` | Optional pre-link: `{"crmId": 12}` → site wash id `12` |
 | `wash_id` | Sync only one CRM wash (empty = all) |
-| `poll_interval` | Seconds (min 60 — site accepts telemetry ≤ 1/min) |
+| `poll_interval` | Seconds (60–120). Site marks wash offline without telemetry after ~3 min; API accepts telemetry ≤ 1/min. |
 | `news_limit` | Max news / promotions per wash |
 
 ## Mapping CRM wash ↔ site wash
