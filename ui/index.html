@@ -10,15 +10,263 @@
   <div id="wm-app"></div>
   <script src="wash-module-sdk.js"></script>
   <script>
+    const WASH_TYPES = [
+      { value: 'self_service', label: { ru: 'Самообслуживание', en: 'Self-service' } },
+      { value: 'robot', label: { ru: 'Робот', en: 'Robot' } },
+      { value: 'manual', label: { ru: 'Ручная', en: 'Manual' } },
+    ];
+
+    let crmWashesCache = null;
+    let renderedWashKey = '';
+
+    function washIdOf(row) {
+      return String((row && (row.id || row._id)) || '');
+    }
+
+    function parseWashesMap(settings) {
+      const out = {};
+      let raw = settings && settings.washes;
+      if (typeof raw === 'string') {
+        try {
+          raw = JSON.parse(raw || '{}');
+        } catch {
+          raw = {};
+        }
+      }
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        raw = {};
+      }
+
+      let legacy = settings && settings.wash_coords;
+      if (typeof legacy === 'string') {
+        try {
+          legacy = JSON.parse(legacy || '{}');
+        } catch {
+          legacy = {};
+        }
+      }
+      if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
+        Object.keys(legacy).forEach(function (key) {
+          if (!raw[key]) raw[key] = legacy[key];
+        });
+      }
+
+      const defaultLat = settings && settings.default_latitude;
+      const defaultLng = settings && settings.default_longitude;
+      const defaultCity = (settings && settings.default_city) || '';
+      const defaultType = (settings && settings.wash_type) || 'self_service';
+
+      Object.keys(raw).forEach(function (key) {
+        const entry = raw[key];
+        if (!entry || typeof entry !== 'object') return;
+        out[key] = {
+          enabled: entry.enabled !== false && entry.enabled !== 'false' && entry.enabled !== 0,
+          latitude: entry.latitude ?? entry.lat ?? defaultLat ?? '',
+          longitude: entry.longitude ?? entry.lng ?? entry.lon ?? defaultLng ?? '',
+          city: entry.city ?? defaultCity ?? '',
+          type: entry.type || defaultType || 'self_service',
+        };
+      });
+      return out;
+    }
+
+    async function fetchCrmWashes() {
+      const token = localStorage.getItem('wash_crm_token') || '';
+      const res = await fetch('/api/crm/washes?limit=200', {
+        headers: {
+          Accept: 'application/json',
+          ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        },
+      });
+      const json = await res.json();
+      if (!res.ok || json.success === false) {
+        throw new Error((json && json.error) || 'HTTP ' + res.status);
+      }
+      const data = json.data !== undefined ? json.data : json;
+      return Array.isArray(data) ? data : [];
+    }
+
+    function collectWashesFromForm(form) {
+      const washes = {};
+      form.querySelectorAll('[data-wash-id]').forEach(function (card) {
+        const id = card.getAttribute('data-wash-id');
+        if (!id) return;
+        const enabledEl = card.querySelector('[data-field="enabled"]');
+        const latEl = card.querySelector('[data-field="latitude"]');
+        const lngEl = card.querySelector('[data-field="longitude"]');
+        const cityEl = card.querySelector('[data-field="city"]');
+        const typeEl = card.querySelector('[data-field="type"]');
+        washes[id] = {
+          enabled: !!(enabledEl && enabledEl.checked),
+          latitude: latEl && latEl.value !== '' ? Number(latEl.value) : null,
+          longitude: lngEl && lngEl.value !== '' ? Number(lngEl.value) : null,
+          city: cityEl ? String(cityEl.value || '').trim() : '',
+          type: typeEl ? String(typeEl.value || 'self_service').trim() : 'self_service',
+        };
+      });
+      return washes;
+    }
+
+    function renderWashesList(form, settings, crmWashes) {
+      const host = form.querySelector('#washes-list');
+      if (!host) return;
+
+      const saved = parseWashesMap(settings || {});
+      const fromForm = collectWashesFromForm(form);
+      const key = crmWashes.map(washIdOf).filter(Boolean).sort().join(',');
+
+      if (key === renderedWashKey && host.querySelector('[data-wash-id]')) {
+        return;
+      }
+      renderedWashKey = key;
+
+      if (!crmWashes.length) {
+        host.innerHTML =
+          '<div class="wm-empty">' +
+          WashModule.escapeHtml(
+            WashModule.t({
+              ru: 'В CRM пока нет моек. Добавьте их в разделе «Мойки».',
+              en: 'No washes in CRM yet. Add them on the Washes page.',
+            })
+          ) +
+          '</div>';
+        return;
+      }
+
+      host.innerHTML = crmWashes
+        .map(function (wash) {
+          const id = washIdOf(wash);
+          if (!id) return '';
+          const defaults = {
+            enabled: true,
+            latitude: settings && settings.default_latitude != null ? settings.default_latitude : '',
+            longitude: settings && settings.default_longitude != null ? settings.default_longitude : '',
+            city: (settings && settings.default_city) || '',
+            type: (settings && settings.wash_type) || 'self_service',
+          };
+          const prev = Object.assign({}, defaults, saved[id] || {}, fromForm[id] || {});
+          const name = String(wash.name || id);
+          const address = String(wash.address || '');
+          const enabled = prev.enabled !== false;
+          const lat = prev.latitude ?? '';
+          const lng = prev.longitude ?? '';
+          const city = prev.city ?? '';
+          const type = prev.type || 'self_service';
+          const typeOptions = WASH_TYPES.map(function (opt) {
+            return (
+              '<option value="' +
+              WashModule.escapeHtml(opt.value) +
+              '"' +
+              (opt.value === type ? ' selected' : '') +
+              '>' +
+              WashModule.escapeHtml(WashModule.t(opt.label)) +
+              '</option>'
+            );
+          }).join('');
+
+          return (
+            '<article class="wm-wash-card" data-wash-id="' +
+            WashModule.escapeHtml(id) +
+            '">' +
+            '<div class="wm-wash-card-head">' +
+            '<label class="wm-wash-enable">' +
+            '<input type="checkbox" data-field="enabled"' +
+            (enabled ? ' checked' : '') +
+            ' />' +
+            '<span><strong>' +
+            WashModule.escapeHtml(name) +
+            '</strong>' +
+            (address
+              ? '<span class="wm-field-hint">' + WashModule.escapeHtml(address) + '</span>'
+              : '') +
+            '</span></label>' +
+            '<span class="wm-wash-id">CRM ' +
+            WashModule.escapeHtml(id) +
+            '</span></div>' +
+            '<div class="wm-wash-fields">' +
+            '<div class="wm-field">' +
+            '<label class="wm-field-label">' +
+            WashModule.escapeHtml(WashModule.t({ ru: 'Широта', en: 'Latitude' })) +
+            '</label>' +
+            '<input class="wm-input" type="number" step="any" data-field="latitude" value="' +
+            WashModule.escapeHtml(lat === null || lat === undefined ? '' : String(lat)) +
+            '" />' +
+            '</div>' +
+            '<div class="wm-field">' +
+            '<label class="wm-field-label">' +
+            WashModule.escapeHtml(WashModule.t({ ru: 'Долгота', en: 'Longitude' })) +
+            '</label>' +
+            '<input class="wm-input" type="number" step="any" data-field="longitude" value="' +
+            WashModule.escapeHtml(lng === null || lng === undefined ? '' : String(lng)) +
+            '" />' +
+            '</div>' +
+            '<div class="wm-field">' +
+            '<label class="wm-field-label">' +
+            WashModule.escapeHtml(WashModule.t({ ru: 'Город', en: 'City' })) +
+            '</label>' +
+            '<input class="wm-input" type="text" data-field="city" value="' +
+            WashModule.escapeHtml(String(city || '')) +
+            '" />' +
+            '</div>' +
+            '<div class="wm-field">' +
+            '<label class="wm-field-label">' +
+            WashModule.escapeHtml(WashModule.t({ ru: 'Тип мойки', en: 'Wash type' })) +
+            '</label>' +
+            '<select class="wm-input" data-field="type">' +
+            typeOptions +
+            '</select>' +
+            '</div></div></article>'
+          );
+        })
+        .join('');
+    }
+
+    async function syncWashesList(form, settings, force) {
+      const host = form.querySelector('#washes-list');
+      if (!host) return;
+      try {
+        const preserved = force || !crmWashesCache ? collectWashesFromForm(form) : null;
+        if (force || !crmWashesCache) {
+          host.innerHTML =
+            '<div class="wm-empty">' +
+            WashModule.escapeHtml(
+              WashModule.t({ ru: 'Загрузка моек CRM…', en: 'Loading CRM washes…' })
+            ) +
+            '</div>';
+          crmWashesCache = await fetchCrmWashes();
+          renderedWashKey = '';
+        }
+        if (preserved && Object.keys(preserved).length) {
+          const mergedSettings = Object.assign({}, settings, {
+            washes: JSON.stringify(
+              Object.assign({}, parseWashesMap(settings), preserved)
+            ),
+          });
+          renderWashesList(form, mergedSettings, crmWashesCache);
+        } else {
+          renderWashesList(form, settings, crmWashesCache);
+        }
+      } catch (err) {
+        host.innerHTML =
+          '<div class="wm-empty">' +
+          WashModule.escapeHtml(
+            WashModule.t({ ru: 'Не удалось загрузить мойки: ', en: 'Failed to load washes: ' }) +
+              (err instanceof Error ? err.message : String(err))
+          ) +
+          '</div>';
+      }
+      WashModule.notifyResize();
+    }
+
     WashModule.createPage({
       moduleId: 'washesnearby',
       accent: '#0ea5e9',
       refreshInterval: 12000,
       title: { ru: 'Автомойки рядом', en: 'Washes Nearby' },
-        subtitle: {
-          ru: 'Публикует мойки на сайт «Автомойки рядом» по UUID (mapsExternalId): цены, занятость постов, новости и акции.',
-          en: 'Publishes washes to Washes Nearby using CRM UUID (mapsExternalId): prices, post occupancy, news and promotions.',
-        },
+      subtitle: {
+        ru: 'Публикует мойки на сайт «Автомойки рядом» по UUID (mapsExternalId): цены, занятость постов, новости и акции.',
+        en: 'Publishes washes to Washes Nearby using CRM UUID (mapsExternalId): prices, post occupancy, news and promotions.',
+      },
       settingsHtml: `
         <div class="wm-field wm-field--full">
           <label class="wm-field-label" for="owner_api_token">${WashModule.t({ ru: 'Owner API токен', en: 'Owner API token' })}</label>
@@ -26,78 +274,66 @@
           <span class="wm-field-hint">${WashModule.t({ ru: 'Кабинет владельца → API. Оставьте пустым, чтобы не менять сохранённый токен.', en: 'Owner cabinet → API. Leave empty to keep the saved token.' })}</span>
         </div>
         <div class="wm-field wm-field--full">
-          <label class="wm-field-label" for="maps_api_base">${WashModule.t({ ru: 'URL API', en: 'API URL' })}</label>
+          <label class="wm-field-label" for="maps_api_base">${WashModule.t({ ru: 'Адрес сайта / API', en: 'Site / API URL' })}</label>
           <input class="wm-input" id="maps_api_base" type="text" name="maps_api_base" placeholder="https://xn----7sb0aeimehj.xn--p1ai" />
         </div>
         <div class="wm-field">
-          <label class="wm-field-label" for="default_latitude">${WashModule.t({ ru: 'Широта', en: 'Latitude' })}</label>
-          <input class="wm-input" id="default_latitude" type="number" step="any" name="default_latitude" />
-        </div>
-        <div class="wm-field">
-          <label class="wm-field-label" for="default_longitude">${WashModule.t({ ru: 'Долгота', en: 'Longitude' })}</label>
-          <input class="wm-input" id="default_longitude" type="number" step="any" name="default_longitude" />
-        </div>
-        <div class="wm-field">
-          <label class="wm-field-label" for="default_city">${WashModule.t({ ru: 'Город', en: 'City' })}</label>
-          <input class="wm-input" id="default_city" type="text" name="default_city" />
-        </div>
-        <div class="wm-field">
-          <label class="wm-field-label" for="poll_interval">${WashModule.t({ ru: 'Интервал (сек)', en: 'Interval (sec)' })}</label>
+          <label class="wm-field-label" for="poll_interval">${WashModule.t({ ru: 'Интервал отправки (сек)', en: 'Send interval (sec)' })}</label>
           <input class="wm-input" id="poll_interval" type="number" name="poll_interval" min="60" max="120" />
           <span class="wm-field-hint">${WashModule.t({ ru: 'Не больше 120 сек: на сайте мойка становится offline без телеметрии ~3 мин.', en: 'Max 120s: site marks wash offline without telemetry after ~3 min.' })}</span>
         </div>
         <div class="wm-field">
-          <label class="wm-field-label" for="news_limit">${WashModule.t({ ru: 'Лимит новостей/акций', en: 'News/promo limit' })}</label>
+          <label class="wm-field-label" for="news_limit">${WashModule.t({ ru: 'Лимит новостей и акций', en: 'News & promo limit' })}</label>
           <input class="wm-input" id="news_limit" type="number" name="news_limit" min="1" max="50" />
         </div>
-        <div class="wm-field">
-          <label class="wm-field-label" for="wash_id">${WashModule.t({ ru: 'Только мойка CRM', en: 'Only CRM wash' })}</label>
-          <input class="wm-input" id="wash_id" type="text" name="wash_id" placeholder="id или пусто = все" />
-        </div>
-        <div class="wm-field">
-          <label class="wm-field-label" for="wash_type">${WashModule.t({ ru: 'Тип мойки', en: 'Wash type' })}</label>
-          <input class="wm-input" id="wash_type" type="text" name="wash_type" placeholder="self_service" />
-        </div>
-        <div class="wm-field wm-field--full">
-          <label class="wm-field-label" for="wash_mapping">${WashModule.t({ ru: 'Сопоставление CRM→сайт (JSON)', en: 'CRM→site mapping (JSON)' })}</label>
-          <textarea class="wm-input" id="wash_mapping" name="wash_mapping" rows="3" placeholder='{"crmWashId": 12}'></textarea>
-          <span class="wm-field-hint">${WashModule.t({ ru: 'Если мойка уже есть на сайте — укажите id. Иначе модуль создаст новую и запомнит связь в data/wash_mapping.json.', en: 'If the wash already exists on the site, set its id. Otherwise the module creates one and stores the link in data/wash_mapping.json.' })}</span>
-        </div>
-        <div class="wm-field wm-field--full">
-          <label class="wm-field-label" for="wash_coords">${WashModule.t({ ru: 'Координаты по мойкам (JSON)', en: 'Per-wash coordinates (JSON)' })}</label>
-          <textarea class="wm-input" id="wash_coords" name="wash_coords" rows="3" placeholder='{"crmWashId":{"lat":55.16,"lng":61.4,"city":"Челябинск"}}'></textarea>
+        <div class="wm-field wm-field--full wm-washes-section">
+          <div class="wm-washes-head">
+            <div>
+              <h3 class="wm-settings-title" style="font-size:0.95rem;margin:0">${WashModule.t({ ru: 'Мойки', en: 'Washes' })}</h3>
+              <p class="wm-field-hint" style="margin:0.25rem 0 0">${WashModule.t({ ru: 'Список из CRM. У каждой мойки — свои координаты, город и тип. Адрес берётся из карточки мойки в CRM.', en: 'List from CRM. Each wash has its own coordinates, city and type. Address comes from the CRM wash card.' })}</p>
+            </div>
+            <button type="button" class="wm-btn wm-btn-ghost" id="wm-refresh-washes">${WashModule.t({ ru: 'Обновить список', en: 'Refresh list' })}</button>
+          </div>
+          <div id="washes-list" class="wm-washes-list"></div>
         </div>`,
       collectSettings(form) {
         const token = String(form.owner_api_token.value || '').trim();
         const settings = {
           maps_api_base: String(form.maps_api_base.value || '').trim(),
-          default_latitude: Number(form.default_latitude.value),
-          default_longitude: Number(form.default_longitude.value),
-          default_city: String(form.default_city.value || '').trim(),
           poll_interval: Number(form.poll_interval.value),
           news_limit: Number(form.news_limit.value),
-          wash_id: String(form.wash_id.value || '').trim(),
-          wash_type: String(form.wash_type.value || '').trim() || 'self_service',
-          wash_mapping: String(form.wash_mapping.value || '').trim(),
-          wash_coords: String(form.wash_coords.value || '').trim(),
+          washes: JSON.stringify(collectWashesFromForm(form)),
+          // Clear legacy keys so they don't override the per-wash list.
+          wash_coords: '',
+          wash_mapping: '',
+          wash_id: '',
+          wash_type: '',
+          default_latitude: '',
+          default_longitude: '',
+          default_city: '',
         };
         if (token) settings.owner_api_token = token;
         return settings;
       },
       applySettings(settings, form) {
         form.maps_api_base.value = settings.maps_api_base ?? 'https://xn----7sb0aeimehj.xn--p1ai';
-        form.default_latitude.value = settings.default_latitude ?? 55.1644;
-        form.default_longitude.value = settings.default_longitude ?? 61.4368;
-        form.default_city.value = settings.default_city ?? '';
         form.poll_interval.value = settings.poll_interval ?? 60;
         form.news_limit.value = settings.news_limit ?? 5;
-        form.wash_id.value = settings.wash_id ?? '';
-        form.wash_type.value = settings.wash_type ?? 'self_service';
-        form.wash_mapping.value = settings.wash_mapping ?? '';
-        form.wash_coords.value = settings.wash_coords ?? '';
         if (settings.owner_api_token) {
           form.owner_api_token.value = '';
-          form.owner_api_token.placeholder = WashModule.t({ ru: '•••••••• (сохранён)', en: '•••••••• (saved)' });
+          form.owner_api_token.placeholder = WashModule.t({
+            ru: '•••••••• (сохранён)',
+            en: '•••••••• (saved)',
+          });
+        }
+        void syncWashesList(form, settings, false);
+
+        const refreshBtn = form.querySelector('#wm-refresh-washes');
+        if (refreshBtn && !refreshBtn.dataset.bound) {
+          refreshBtn.dataset.bound = '1';
+          refreshBtn.addEventListener('click', function () {
+            void syncWashesList(form, settings, true);
+          });
         }
       },
       metrics(snap) {
@@ -106,12 +342,15 @@
           { label: WashModule.t({ ru: 'Занято', en: 'Busy' }), value: snap.busy ?? 0, accent: true },
           { label: WashModule.t({ ru: 'Свободно', en: 'Free' }), value: snap.free ?? 0 },
           { label: WashModule.t({ ru: 'Офлайн', en: 'Broken' }), value: snap.broken ?? 0 },
-          { label: WashModule.t({ ru: 'Связок', en: 'Mapped' }), value: snap.mappedCount ?? 0 },
+          { label: WashModule.t({ ru: 'Синхр.', en: 'Synced' }), value: snap.syncedThisCycle ?? 0 },
         ];
       },
       renderOverview(snap, status) {
         if (!snap || !snap.recordedAt) {
-          const running = status && (status.activeRunStatus === 'running' || (status.state && status.state.status === 'running'));
+          const running =
+            status &&
+            (status.activeRunStatus === 'running' ||
+              (status.state && status.state.status === 'running'));
           const hint = running
             ? WashModule.t({ ru: 'Ожидание первой синхронизации…', en: 'Waiting for the first sync…' })
             : WashModule.t({ ru: 'Нет статуса — запустите модуль.', en: 'No status yet — start the module.' });
@@ -119,21 +358,32 @@
         }
         const rows = Array.isArray(snap.results) ? snap.results : [];
         const listHtml = rows.length
-          ? `<ul class="wm-list">${rows.map((r) =>
-              `<li><strong>${WashModule.escapeHtml(String(r.name || r.crmWashId || '—'))}</strong>
+          ? `<ul class="wm-list">${rows
+              .map(
+                (r) =>
+                  `<li><strong>${WashModule.escapeHtml(String(r.name || r.crmWashId || '—'))}</strong>
                <span class="wm-field-hint">CRM ${WashModule.escapeHtml(String(r.crmWashId))} → сайт ${WashModule.escapeHtml(String(r.remoteWashId))}
                · занято ${WashModule.escapeHtml(String(r.busy ?? 0))} · свободно ${WashModule.escapeHtml(String(r.free ?? 0))}
                · офлайн ${WashModule.escapeHtml(String(r.broken ?? 0))} · ext ${WashModule.escapeHtml(String(r.externalId || r.crmWashId || '—'))}</span></li>`
-            ).join('')}</ul>`
+              )
+              .join('')}</ul>`
           : `<p class="wm-field-hint">${WashModule.t({ ru: 'Пока нет результатов.', en: 'No results yet.' })}</p>`;
         const errors = Array.isArray(snap.recentErrors) ? snap.recentErrors : [];
         const errHtml = errors.length
-          ? `<ul class="wm-list">${errors.map((e) =>
-              `<li><strong>${WashModule.escapeHtml(String(e.name || e.crmWashId || '—'))}</strong><br><span class="wm-field-hint">${WashModule.escapeHtml(String(e.error || ''))}</span></li>`
-            ).join('')}</ul>`
+          ? `<ul class="wm-list">${errors
+              .map(
+                (e) =>
+                  `<li><strong>${WashModule.escapeHtml(String(e.name || e.crmWashId || '—'))}</strong><br><span class="wm-field-hint">${WashModule.escapeHtml(String(e.error || ''))}</span></li>`
+              )
+              .join('')}</ul>`
           : `<p class="wm-field-hint">${WashModule.t({ ru: 'Ошибок нет.', en: 'No errors.' })}</p>`;
+        const skipped =
+          snap.skippedCount != null
+            ? `<p class="wm-field-hint">${WashModule.t({ ru: 'Пропущено (выкл.)', en: 'Skipped (disabled)' })}: ${WashModule.escapeHtml(String(snap.skippedCount))}</p>`
+            : '';
         return `
           <h2 class="wm-section-title">${WashModule.t({ ru: 'Мойки', en: 'Washes' })}</h2>
+          ${skipped}
           ${listHtml}
           <h2 class="wm-section-title" style="margin-top:1rem">${WashModule.t({ ru: 'Ошибки', en: 'Errors' })}</h2>
           ${errHtml}

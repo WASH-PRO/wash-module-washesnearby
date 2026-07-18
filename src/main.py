@@ -421,20 +421,12 @@ def wash_maps_uuid(wash: dict) -> str:
     return str(wash.get("mapsExternalId") or wash.get("maps_external_id") or "").strip()
 
 
-def load_mapping(settings: dict[str, Any]) -> dict[str, int]:
+def load_mapping() -> dict[str, int]:
     """crmWashId → remote numeric id (cache only; identity is mapsExternalId UUID)."""
     mapping: dict[str, int] = {}
     file_map = load_json(os.path.join(DATA_DIR, MAPPING_FILE), {})
     if isinstance(file_map, dict):
         for key, value in file_map.items():
-            try:
-                mapping[str(key)] = int(value)
-            except (TypeError, ValueError):
-                continue
-
-    manual = parse_json_setting(pick_str(settings, "wash_mapping", "WASH_MAPPING", ""), {})
-    if isinstance(manual, dict):
-        for key, value in manual.items():
             try:
                 mapping[str(key)] = int(value)
             except (TypeError, ValueError):
@@ -446,41 +438,104 @@ def save_mapping(mapping: dict[str, int]) -> None:
     save_json(os.path.join(DATA_DIR, MAPPING_FILE), mapping)
 
 
-def load_wash_coords(settings: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    raw = parse_json_setting(pick_str(settings, "wash_coords", "WASH_COORDS", ""), {})
-    return raw if isinstance(raw, dict) else {}
+def _as_settings_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        parsed = parse_json_setting(raw, {})
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
-def resolve_geo(
-    wash: dict,
-    settings: dict[str, Any],
-    coords_map: dict[str, dict[str, Any]],
-) -> tuple[float, float, str]:
-    wid = ref_id(wash)
-    override = coords_map.get(wid) or coords_map.get(str(wid)) or {}
-    if not isinstance(override, dict):
-        override = {}
+def load_washes_config(settings: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """
+    Per-wash params from settings.washes (preferred).
 
-    lat = override.get("lat", override.get("latitude"))
-    lng = override.get("lng", override.get("lon", override.get("longitude")))
-    city = str(override.get("city") or pick_str(settings, "default_city", "DEFAULT_CITY", "") or "")
+    Migrates legacy wash_coords / defaults / wash_type when washes is empty.
+    """
+    washes = _as_settings_dict(settings.get("washes"))
+    if not washes:
+        washes = _as_settings_dict(
+            settings.get("wash_coords")
+            or pick_str(settings, "wash_coords", "WASH_COORDS", "")
+            or pick_str(settings, "washes", "WASHES", "")
+        )
 
-    if lat is None:
-        lat = pick_number(settings, "default_latitude", "DEFAULT_LATITUDE", 0)
-    if lng is None:
-        lng = pick_number(settings, "default_longitude", "DEFAULT_LONGITUDE", 0)
+    default_lat = settings.get("default_latitude")
+    default_lng = settings.get("default_longitude")
+    default_city = str(settings.get("default_city") or "").strip()
+    default_type = pick_str(settings, "wash_type", "WASH_TYPE", "self_service") or "self_service"
+
+    result: dict[str, dict[str, Any]] = {}
+    for key, value in washes.items():
+        if not isinstance(value, dict):
+            continue
+        entry = dict(value)
+        # Legacy wash_coords used lat/lng
+        if "latitude" not in entry and "lat" in entry:
+            entry["latitude"] = entry.get("lat")
+        if "longitude" not in entry and ("lng" in entry or "lon" in entry):
+            entry["longitude"] = entry.get("lng", entry.get("lon"))
+        if "enabled" not in entry:
+            entry["enabled"] = True
+        if not entry.get("type"):
+            entry["type"] = default_type
+        result[str(key)] = entry
+
+    # If only global defaults existed (no per-wash map), keep them available
+    # via a special key used only when a wash has no own entry.
+    if default_lat is not None or default_lng is not None or default_city:
+        result.setdefault(
+            "__defaults__",
+            {
+                "enabled": True,
+                "latitude": default_lat,
+                "longitude": default_lng,
+                "city": default_city,
+                "type": default_type,
+            },
+        )
+    return result
+
+
+def wash_entry(washes_cfg: dict[str, dict[str, Any]], wid: str) -> dict[str, Any]:
+    entry = washes_cfg.get(wid) or washes_cfg.get(str(wid))
+    if isinstance(entry, dict):
+        return entry
+    defaults = washes_cfg.get("__defaults__")
+    return defaults if isinstance(defaults, dict) else {}
+
+
+def wash_enabled(entry: dict[str, Any]) -> bool:
+    if "enabled" not in entry:
+        return True
+    raw = entry.get("enabled")
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def resolve_geo(wid: str, entry: dict[str, Any]) -> tuple[float, float, str]:
+    lat = entry.get("latitude", entry.get("lat"))
+    lng = entry.get("longitude", entry.get("lng", entry.get("lon")))
+    city = str(entry.get("city") or "").strip()
 
     try:
-        lat_f = float(lat)
-        lng_f = float(lng)
+        lat_f = float(lat) if lat is not None and lat != "" else 0.0
+        lng_f = float(lng) if lng is not None and lng != "" else 0.0
     except (TypeError, ValueError) as err:
         raise ValueError(f"Некорректные координаты для мойки {wid}") from err
 
     if lat_f == 0 and lng_f == 0:
         raise ValueError(
-            f"Задайте default_latitude/default_longitude или wash_coords для мойки {wid}"
+            f"Задайте широту и долготу для мойки {wid} в настройках модуля"
         )
     return lat_f, lng_f, city
+
+
+def resolve_wash_type(entry: dict[str, Any]) -> str:
+    wash_type = str(entry.get("type") or "self_service").strip() or "self_service"
+    return wash_type if wash_type in ("self_service", "robot", "manual") else "self_service"
 
 
 def latest_states(states: list[dict]) -> dict[str, dict]:
@@ -630,8 +685,7 @@ def ensure_remote_wash(
     client: MapsClient,
     wash: dict,
     mapping: dict[str, int],
-    settings: dict[str, Any],
-    coords_map: dict[str, dict[str, Any]],
+    wash_cfg: dict[str, Any],
     posts_payload: list[dict],
     service_modes: list[dict],
     wash_state: dict[str, Any],
@@ -683,8 +737,7 @@ def ensure_remote_wash(
                 return remote_id, str(remote_id), external_uuid
         return remote_id, ext_ref, external_uuid
 
-    lat, lng, city = resolve_geo(wash, settings, coords_map)
-    wash_type = pick_str(settings, "wash_type", "WASH_TYPE", "self_service") or "self_service"
+    lat, lng, city = resolve_geo(wid, wash_cfg)
     body: dict[str, Any] = {
         "name": str(wash.get("name") or f"Мойка {wid}"),
         "external_id": external_uuid,
@@ -692,7 +745,7 @@ def ensure_remote_wash(
         "city": city or None,
         "latitude": lat,
         "longitude": lng,
-        "type": wash_type if wash_type in ("self_service", "robot", "manual") else "self_service",
+        "type": resolve_wash_type(wash_cfg),
         "description": str(wash.get("description") or ""),
         "is_24h": True,
         "posts": posts_payload or [{"number": "1", "status": "free"}],
@@ -731,12 +784,10 @@ def run_cycle() -> dict:
         "false",
         "no",
     )
-    only_wash = pick_str(settings, "wash_id", "WASH_ID", "")
-
     now = datetime.now(timezone.utc)
     client = MapsClient(maps_base, token)
-    mapping = load_mapping(settings)
-    coords_map = load_wash_coords(settings)
+    mapping = load_mapping()
+    washes_cfg = load_washes_config(settings)
     sync_state = load_json(os.path.join(DATA_DIR, SYNC_STATE_FILE), {})
     if not isinstance(sync_state, dict):
         sync_state = {}
@@ -754,16 +805,18 @@ def run_cycle() -> dict:
     }
     state_by_post = latest_states(states)
 
-    if only_wash:
-        washes = [w for w in washes if ref_id(w) == only_wash]
-
     results: list[dict] = []
     errors: list[dict] = []
     totals = {"free": 0, "busy": 0, "broken": 0, "posts": 0}
+    skipped = 0
 
     for wash in washes:
         wid = ref_id(wash)
         if not wid:
+            continue
+        entry = wash_entry(washes_cfg, wid)
+        if not wash_enabled(entry):
+            skipped += 1
             continue
         try:
             wash_posts = [p for p in posts_all if ref_id(p.get("washId")) == wid]
@@ -777,8 +830,7 @@ def run_cycle() -> dict:
                 client,
                 wash,
                 mapping,
-                settings,
-                coords_map,
+                entry,
                 posts_payload,
                 service_modes,
                 wash_state,
@@ -790,8 +842,9 @@ def run_cycle() -> dict:
                 patch_body["address"] = str(wash.get("address") or "Адрес не указан")
                 if wash.get("description"):
                     patch_body["description"] = str(wash.get("description"))
+                patch_body["type"] = resolve_wash_type(entry)
                 try:
-                    lat, lng, city = resolve_geo(wash, settings, coords_map)
+                    lat, lng, city = resolve_geo(wid, entry)
                     patch_body["latitude"] = lat
                     patch_body["longitude"] = lng
                     if city:
@@ -811,7 +864,19 @@ def run_cycle() -> dict:
 
             fp = content_fingerprint(
                 {
-                    "card": {k: patch_body[k] for k in ("name", "address", "description", "latitude", "longitude", "city") if k in patch_body},
+                    "card": {
+                        k: patch_body[k]
+                        for k in (
+                            "name",
+                            "address",
+                            "description",
+                            "latitude",
+                            "longitude",
+                            "city",
+                            "type",
+                        )
+                        if k in patch_body
+                    },
                     "modes": patch_body.get("service_modes"),
                     "news": patch_body.get("news"),
                     "promotions": patch_body.get("promotions"),
@@ -897,6 +962,7 @@ def run_cycle() -> dict:
         "configured": bool(token),
         "pollInterval": poll_interval,
         "crmWashCount": len(washes),
+        "skippedCount": skipped,
         "mappedCount": len(mapping),
         "syncedThisCycle": len(results),
         "busy": totals["busy"],

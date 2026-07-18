@@ -8,7 +8,7 @@
     "ru": "Создаёт мойки на сайте «Автомойки рядом» по UUID (mapsExternalId), синхронизирует цены (макс. по постам), занятость, новости и акции.",
     "en": "Creates washes on Washes Nearby using CRM UUID (mapsExternalId); syncs max mode prices, post occupancy, news and promotions."
   },
-  "version": "1.0.4",
+  "version": "1.1.0",
   "author": "WASH-PRO",
   "license": "MIT",
   "category": "publishing",
@@ -33,80 +33,17 @@
       "key": "maps_api_base",
       "type": "string",
       "label": {
-        "ru": "URL API Автомойки рядом",
-        "en": "Washes Nearby API URL"
+        "ru": "Адрес сайта / API Автомойки рядом",
+        "en": "Washes Nearby site / API URL"
       },
       "default": "https://xn----7sb0aeimehj.xn--p1ai"
-    },
-    {
-      "key": "default_latitude",
-      "type": "number",
-      "label": {
-        "ru": "Широта по умолчанию",
-        "en": "Default latitude"
-      },
-      "default": 55.1644
-    },
-    {
-      "key": "default_longitude",
-      "type": "number",
-      "label": {
-        "ru": "Долгота по умолчанию",
-        "en": "Default longitude"
-      },
-      "default": 61.4368
-    },
-    {
-      "key": "default_city",
-      "type": "string",
-      "label": {
-        "ru": "Город по умолчанию",
-        "en": "Default city"
-      },
-      "default": ""
-    },
-    {
-      "key": "wash_coords",
-      "type": "string",
-      "label": {
-        "ru": "Координаты моек (JSON)",
-        "en": "Wash coordinates (JSON)"
-      },
-      "default": ""
-    },
-    {
-      "key": "wash_mapping",
-      "type": "string",
-      "label": {
-        "ru": "Сопоставление CRM→сайт (JSON)",
-        "en": "CRM→site mapping (JSON)"
-      },
-      "default": ""
-    },
-    {
-      "key": "wash_id",
-      "type": "string",
-      "label": {
-        "ru": "Только мойка CRM (пусто = все)",
-        "en": "Only CRM wash id (empty = all)"
-      },
-      "default": ""
-    },
-    {
-      "key": "wash_type",
-      "type": "string",
-      "label": {
-        "ru": "Тип мойки (self_service/robot/manual)",
-        "en": "Wash type (self_service/robot/manual)"
-      },
-      "default": "self_service"
     },
     {
       "key": "poll_interval",
       "type": "number",
       "label": {
-        "ru": "Интервал синхронизации (сек)",
-        "en": "Sync interval (sec)"
+        "ru": "Интервал отправки (сек)",
+        "en": "Send interval (sec)"
       },
       "default": 60,
       "min": 60,
@@ -116,12 +53,21 @@
       "key": "news_limit",
       "type": "number",
       "label": {
-        "ru": "Лимит новостей/акций",
-        "en": "News/promotions limit"
+        "ru": "Лимит новостей и акций",
+        "en": "News & promotions limit"
       },
       "default": 5,
       "min": 1,
       "max": 50
+    },
+    {
+      "key": "washes",
+      "type": "string",
+      "label": {
+        "ru": "Параметры моек (JSON, заполняется UI)",
+        "en": "Per-wash params (JSON, filled by UI)"
+      },
+      "default": ""
     }
   ]
 }

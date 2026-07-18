@@ -28,16 +28,32 @@ If a wash has no `mapsExternalId`, the module skips it with an error — update 
 
 ## Settings
 
+### Common
+
 | Key | Description |
 |-----|-------------|
 | `owner_api_token` | Owner API Bearer token (Owner cabinet → API) |
-| `maps_api_base` | API base URL (default punycode `https://xn----7sb0aeimehj.xn--p1ai` = мойка-про.рф). Owner API works over HTTP/2 — the module calls it via `curl --http2`. |
-| `default_latitude` / `default_longitude` / `default_city` | Used when creating a wash (CRM has address text only) |
-| `wash_coords` | Optional JSON per CRM wash: `{"crmId":{"lat":55.16,"lng":61.4,"city":"…"}}` |
-| `wash_mapping` | Optional cache: `{"crmId": 12}` → site wash id `12` |
-| `wash_id` | Sync only one CRM wash (empty = all) |
+| `maps_api_base` | Site / API base URL (default punycode `https://xn----7sb0aeimehj.xn--p1ai` = мойка-про.рф). Owner API works over HTTP/2 — the module calls it via `curl --http2`. |
 | `poll_interval` | Seconds (60–120). Site marks wash offline without telemetry after ~3 min; API accepts telemetry ≤ 1/min. |
 | `news_limit` | Max news / promotions per wash |
+
+### Per wash (`washes`)
+
+The settings UI loads CRM washes and shows fields for each one. Stored as:
+
+```json
+{
+  "crmWashId": {
+    "enabled": true,
+    "latitude": 55.16,
+    "longitude": 61.4,
+    "city": "Chelyabinsk",
+    "type": "self_service"
+  }
+}
+```
+
+Address and name come from the CRM wash card. Uncheck `enabled` to skip a wash. Legacy `wash_coords` / default lat-lng / `wash_type` are still read if `washes` is empty.
 
 ## Install
 
@@ -49,7 +65,7 @@ Requires PyOrchestrator (`PYORCHESTRATOR_ENABLED=true`) and CRM washes with `map
 
 | File | Purpose |
 |------|---------|
-| `data/wash_mapping.json` | Optional CRM id → site numeric id cache |
+| `data/wash_mapping.json` | Optional cache CRM id → numeric site id |
 | `data/sync_state.json` | Content fingerprints and last telemetry time |
 | `data/last_snapshot.json` | Snapshot for UI |
 | `data/settings.json` | Module settings |

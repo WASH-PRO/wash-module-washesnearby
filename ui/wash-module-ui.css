@@ -539,6 +539,80 @@ html.wm-dark .wm-textarea:focus {
   font-weight: 600;
 }
 
+.wm-washes-section {
+  margin-top: 0.35rem;
+}
+
+.wm-washes-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.wm-washes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wm-wash-card {
+  border: 1px solid var(--wm-border);
+  border-radius: calc(var(--wm-radius) - 2px);
+  background: var(--wm-canvas);
+  padding: 0.85rem;
+}
+
+.wm-wash-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.wm-wash-enable {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.wm-wash-enable input {
+  margin-top: 0.2rem;
+  accent-color: var(--wm-accent);
+}
+
+.wm-wash-enable strong {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.wm-wash-enable .wm-field-hint {
+  display: block;
+  margin-top: 0.15rem;
+}
+
+.wm-wash-id {
+  font-size: 0.6875rem;
+  color: var(--wm-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.wm-wash-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem 0.75rem;
+}
+
+.wm-wash-fields .wm-field {
+  margin: 0;
+}
+
 @media (max-width: 720px) {
   .wm-form-grid {
     grid-template-columns: 1fr;
@@ -546,6 +620,10 @@ html.wm-dark .wm-textarea:focus {
 
   .wm-field-standalone.wm-field {
     max-width: none;
+  }
+
+  .wm-wash-fields {
+    grid-template-columns: 1fr;
   }
 }
 
