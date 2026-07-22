@@ -34,6 +34,7 @@
 - Итоги мойки = сумма постов.
 - Агрегаты **7д / 30д модуль не считает** — их суммирует сайт по дневным `today_*`.
 - Касса уходит в том же `PUT .../telemetry`, что и занятость (≤ 1/мин). Выключатель: `sync_finance` (по умолчанию вкл.).
+- `GET /api/crm/finance-stats` требует авторизации: модуль логинится в CRM через `SERVICE_LOGIN` / `SERVICE_PASSWORD` (secrets от modules-bridge).
 
 Проверка: `GET /api/v1/owner/car-washes/{id}/finance?period=1d|7d|30d`.
 

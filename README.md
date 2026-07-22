@@ -34,6 +34,7 @@ Rules:
 - Wash-level buckets = sum of posts.
 - **Do not** send 7d/30d aggregates — the site sums daily `today_*` itself.
 - Finance rides in the same `PUT .../telemetry` as occupancy (≤ 1/min). Toggle with env/setting `sync_finance` (default on).
+- `GET /api/crm/finance-stats` is authenticated: the module logs in with CRM `SERVICE_LOGIN` / `SERVICE_PASSWORD` (injected by modules-bridge).
 
 Owner check after sync: `GET /api/v1/owner/car-washes/{id}/finance?period=1d|7d|30d`.
 

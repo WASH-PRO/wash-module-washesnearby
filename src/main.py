@@ -35,6 +35,9 @@ SNAPSHOT_FILE = "last_snapshot.json"
 SETTINGS_FILE = "settings.json"
 SYNC_STATE_FILE = "sync_state.json"
 
+_crm_access_token: str | None = None
+_crm_token_expires_at = 0.0
+
 
 def resolve_data_dir() -> str:
     for key in ("MODULE_DATA_DIR", "SECRET_MODULE_DATA_DIR"):
@@ -213,24 +216,94 @@ def post_status(state: dict | None) -> str:
     return "busy" if post_busy(state) else "free"
 
 
-def crm_get(path: str) -> Any:
-    url = f"{API_BASE}{path}"
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=45) as resp:
+def crm_headers(*, auth: bool = False) -> dict[str, str]:
+    headers = {"Accept": "application/json"}
+    if auth:
+        token = ensure_crm_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def ensure_crm_token() -> str:
+    """JWT for authenticated CRM endpoints (finance-stats). Uses service account."""
+    global _crm_access_token, _crm_token_expires_at
+
+    preset = (
+        os.environ.get("CRM_ACCESS_TOKEN")
+        or os.environ.get("SECRET_CRM_ACCESS_TOKEN")
+        or ""
+    ).strip()
+    if preset:
+        return preset
+
+    now = time.time()
+    if _crm_access_token and now < _crm_token_expires_at:
+        return _crm_access_token
+
+    login = (
+        os.environ.get("SERVICE_LOGIN")
+        or os.environ.get("SECRET_SERVICE_LOGIN")
+        or "service"
+    ).strip()
+    password = (
+        os.environ.get("SERVICE_PASSWORD")
+        or os.environ.get("SECRET_SERVICE_PASSWORD")
+        or "ServiceInternal123!"
+    )
+    body = json.dumps({"login": login, "password": password}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{API_BASE}/api/auth/login",
+        data=body,
+        method="POST",
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
+    data = payload.get("data") if isinstance(payload, dict) else None
+    token = ""
+    if isinstance(data, dict):
+        token = str(data.get("accessToken") or "").strip()
+    if not token:
+        raise RuntimeError("CRM login: accessToken missing")
+    _crm_access_token = token
+    # Refresh a bit before typical 15m expiry.
+    _crm_token_expires_at = now + 14 * 60
+    return token
+
+
+def crm_get(path: str, *, auth: bool = False) -> Any:
+    url = f"{API_BASE}{path}"
+    req = urllib.request.Request(url, headers=crm_headers(auth=auth))
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        if auth and err.code == 401:
+            # Force re-login once.
+            global _crm_access_token, _crm_token_expires_at
+            _crm_access_token = None
+            _crm_token_expires_at = 0.0
+            req = urllib.request.Request(url, headers=crm_headers(auth=True))
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        else:
+            raise
     if isinstance(payload, dict) and "data" in payload:
         return payload["data"]
     return payload
 
 
-def crm_list(path: str) -> list[dict]:
-    data = crm_get(path)
+def crm_list(path: str, *, auth: bool = False) -> list[dict]:
+    data = crm_get(path, auth=auth)
     if isinstance(data, list):
         return [row for row in data if isinstance(row, dict)]
     return []
 
 
-def crm_list_all(path: str, *, page_size: int = 100, max_pages: int = 50) -> list[dict]:
+def crm_list_all(
+    path: str, *, page_size: int = 100, max_pages: int = 50, auth: bool = False
+) -> list[dict]:
     """Page through a CRM list endpoint until exhausted."""
     base = path.split("?", 1)[0]
     query = path.split("?", 1)[1] if "?" in path else ""
@@ -240,7 +313,7 @@ def crm_list_all(path: str, *, page_size: int = 100, max_pages: int = 50) -> lis
         params["page"] = [str(page)]
         params["limit"] = [str(page_size)]
         qs = urllib.parse.urlencode({k: v[0] for k, v in params.items()})
-        chunk = crm_list(f"{base}?{qs}")
+        chunk = crm_list(f"{base}?{qs}", auth=auth)
         rows.extend(chunk)
         if len(chunk) < page_size:
             break
@@ -1039,7 +1112,13 @@ def run_cycle() -> dict:
     states = crm_list("/api/crm/post-states?limit=500")
     work_mode_rows = crm_list("/api/crm/work-modes?limit=100")
     messages = crm_list("/api/crm/info-messages?limit=500")
-    finance_stats = crm_list_all("/api/crm/finance-stats") if sync_finance else []
+    finance_stats: list[dict] = []
+    if sync_finance:
+        try:
+            finance_stats = crm_list_all("/api/crm/finance-stats", auth=True)
+        except Exception as err:  # noqa: BLE001
+            log(f"finance-stats unavailable (auth/API): {err}")
+            finance_stats = []
 
     work_modes = {
         str(m.get("code")): str(m.get("name") or m.get("code"))
