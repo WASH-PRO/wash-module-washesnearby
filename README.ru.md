@@ -24,7 +24,7 @@
 |----------------|--------------|
 | `before_collection.{cash,external,discount}` | period `before_collection`: `cash`, `cashless`→`external`, `discountOps`→`discount` |
 | `after_collection.*` | period `after_collection` |
-| `today.*` | Дневная дельта **`after_collection`** относительно baseline в `data/sync_state.json` (в CRM нет периода «сегодня») |
+| `today.*` | Только из записей **за сегодня** (`recordedAt` в `finance_timezone`). При первом снимке дня: `today ≈ before_collection`. Дальше копится новый оборот. **Вчерашний день не нужен.** |
 | `posts[].number` | `posts.postNumber` |
 | `date` | Локальный день в `finance_timezone` (по умолчанию `Asia/Yekaterinburg`) |
 

@@ -24,7 +24,7 @@ Source: CRM **`GET /api/crm/finance-stats`** (MQTT `state/totals` upserted by me
 |-------------|------------|
 | `before_collection.{cash,external,discount}` | period `before_collection`: `cash`, `cashless`→`external`, `discountOps`→`discount` |
 | `after_collection.*` | period `after_collection` (same field map) |
-| `today.*` | Day delta of **`after_collection`** vs baseline in `data/sync_state.json` (CRM has no daily period) |
+| `today.*` | From **today's** `finance-stats` only (`recordedAt` in `finance_timezone`). First sighting of the day: `today ≈ before_collection` (= `after − (after − before)`). Then accumulates new revenue. **No yesterday required.** |
 | `posts[].number` | `posts.postNumber` |
 | `date` | Local calendar day in `finance_timezone` (default `Asia/Yekaterinburg`) |
 

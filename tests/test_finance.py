@@ -59,7 +59,41 @@ class FinanceMappingTests(unittest.TestCase):
         )
         self.assertIsNone(payload)
 
-    def test_build_finance_payload_today_delta(self):
+    def test_build_finance_payload_skips_other_days(self):
+        posts = [{"id": "p1", "postNumber": 1, "washId": "wash1"}]
+        stats = [
+            {
+                "washId": "wash1",
+                "postId": "p1",
+                "period": "before_collection",
+                "cash": 100,
+                "cashless": 50,
+                "discountOps": 10,
+                "recordedAt": "2026-07-21T10:00:00Z",
+            },
+            {
+                "washId": "wash1",
+                "postId": "p1",
+                "period": "after_collection",
+                "cash": 5000,
+                "cashless": 8000,
+                "discountOps": 400,
+                "recordedAt": "2026-07-21T10:00:00Z",
+            },
+        ]
+        payload = build_finance_payload(
+            "wash1",
+            posts,
+            stats,
+            {},
+            finance_date="2026-07-22",
+            finance_timezone="UTC",
+            ref_id=ref_id,
+        )
+        self.assertIsNone(payload)
+
+    def test_build_finance_payload_today_from_todays_rows(self):
+        """today ≈ before on first sync (no yesterday); then grows with after."""
         posts = [
             {"id": "p1", "postNumber": 1, "washId": "wash1"},
             {"id": "p2", "postNumber": 2, "washId": "wash1"},
@@ -105,15 +139,32 @@ class FinanceMappingTests(unittest.TestCase):
         state: dict = {}
 
         first = build_finance_payload(
-            "wash1", posts, stats, state, finance_date="2026-07-22", ref_id=ref_id
+            "wash1",
+            posts,
+            stats,
+            state,
+            finance_date="2026-07-22",
+            finance_timezone="UTC",
+            ref_id=ref_id,
         )
         assert first is not None
         self.assertEqual(first["date"], "2026-07-22")
-        self.assertEqual(first["today"], empty_bucket())
+        # First sighting: today == before_collection (no yesterday needed).
+        self.assertEqual(
+            first["today"],
+            {"cash": 120.0, "external": 80.0, "discount": 15.0},
+        )
         self.assertEqual(first["before_collection"]["cash"], 120.0)
-        self.assertEqual(first["after_collection"]["external"], 10000.0)
-        self.assertEqual(len(first["posts"]), 2)
+        self.assertIn("dayStartByPost", state["financeBaseline"])
 
+        # Growth on same day (+200 cash on post 1 after & before)
+        stats[0] = {
+            **stats[0],
+            "cash": 300,
+            "cashless": 350,
+            "discountOps": 60,
+            "recordedAt": "2026-07-22T12:00:00Z",
+        }
         stats[1] = {
             **stats[1],
             "cash": 5200,
@@ -122,19 +173,38 @@ class FinanceMappingTests(unittest.TestCase):
             "recordedAt": "2026-07-22T12:00:00Z",
         }
         second = build_finance_payload(
-            "wash1", posts, stats, state, finance_date="2026-07-22", ref_id=ref_id
+            "wash1",
+            posts,
+            stats,
+            state,
+            finance_date="2026-07-22",
+            finance_timezone="UTC",
+            ref_id=ref_id,
         )
         assert second is not None
         self.assertEqual(
             second["today"],
-            {"cash": 200.0, "external": 300.0, "discount": 50.0},
+            {"cash": 320.0, "external": 380.0, "discount": 65.0},
         )
 
+        # New calendar day: only today's rows count (update recordedAt).
+        for i, row in enumerate(stats):
+            stats[i] = {**row, "recordedAt": "2026-07-23T08:00:00Z"}
         third = build_finance_payload(
-            "wash1", posts, stats, state, finance_date="2026-07-23", ref_id=ref_id
+            "wash1",
+            posts,
+            stats,
+            state,
+            finance_date="2026-07-23",
+            finance_timezone="UTC",
+            ref_id=ref_id,
         )
         assert third is not None
-        self.assertEqual(third["today"], empty_bucket())
+        self.assertEqual(
+            third["today"],
+            {"cash": 320.0, "external": 380.0, "discount": 65.0},
+        )
+        self.assertEqual(state["financeBaseline"]["date"], "2026-07-23")
 
 
 if __name__ == "__main__":

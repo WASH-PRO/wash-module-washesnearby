@@ -422,6 +422,23 @@ def local_finance_date(tz_name: str, now: datetime | None = None) -> str:
     return now.astimezone(timezone.utc).date().isoformat()
 
 
+def finance_row_local_date(row: dict[str, Any], tz_name: str) -> str | None:
+    """Local calendar date of a finance-stats row, or None if no timestamp."""
+    for key in ("recordedAt", "updatedAt", "createdAt"):
+        raw = row.get(key)
+        if not raw or not isinstance(raw, str):
+            continue
+        text = raw.strip().replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return local_finance_date(tz_name, dt)
+        except ValueError:
+            continue
+    return None
+
+
 def build_finance_payload(
     wash_id: str,
     wash_posts: list[dict[str, Any]],
@@ -429,22 +446,29 @@ def build_finance_payload(
     wash_state: dict[str, Any],
     *,
     finance_date: str,
+    finance_timezone: str = DEFAULT_FINANCE_TIMEZONE,
     ref_id: Callable[[Any], str],
 ) -> dict[str, Any] | None:
     """
     Build Owner Integration `finance` block from CRM `/api/crm/finance-stats`.
 
-    - before_collection / after_collection: live MQTT counters (CRM cash/cashless/discountOps)
-    - today: day delta of after_collection vs baseline stored in wash_state
+    CRM has no day ledger — only live before/after counters (updated today).
+    - Use only rows whose recordedAt falls on finance_date (local TZ).
+    - today = after_collection − day_start, where day_start is fixed on first
+      sighting of the calendar day as (after − before). That equals before_collection
+      at first sync and then accumulates new revenue — no yesterday required.
     - cashless → external
 
-    Returns None when this wash has no finance-stats rows (omit block — do not zero-wipe).
+    Returns None when this wash has no today's finance-stats rows.
     """
-    wash_rows = [
-        row
-        for row in finance_stats
-        if isinstance(row, dict) and ref_id(row.get("washId")) == wash_id
-    ]
+    wash_rows = []
+    for row in finance_stats:
+        if not isinstance(row, dict) or ref_id(row.get("washId")) != wash_id:
+            continue
+        row_date = finance_row_local_date(row, finance_timezone)
+        if row_date is not None and row_date != finance_date:
+            continue
+        wash_rows.append(row)
     if not wash_rows:
         return None
 
@@ -456,12 +480,13 @@ def build_finance_payload(
     if not isinstance(baseline, dict):
         baseline = {}
     baseline_date = str(baseline.get("date") or "")
-    after_by_post = baseline.get("afterByPost")
-    if not isinstance(after_by_post, dict):
-        after_by_post = {}
+    # dayStartByPost: lifetime counters at local day start (after − before on first sighting).
+    day_start_by_post = baseline.get("dayStartByPost")
+    if not isinstance(day_start_by_post, dict):
+        day_start_by_post = {}
 
     new_day = baseline_date != finance_date
-    next_after_by_post: dict[str, dict[str, float]] = {}
+    next_day_start: dict[str, dict[str, float]] = {}
     posts_out: list[dict[str, Any]] = []
 
     ordered = sorted(wash_posts, key=lambda p: int(p.get("postNumber") or 0))
@@ -483,25 +508,27 @@ def build_finance_payload(
         before = bucket_from_crm_row(before_row)
         after = bucket_from_crm_row(after_row)
 
-        if new_day:
-            today = empty_bucket()
-            next_after_by_post[number] = dict(after)
+        stored = day_start_by_post.get(number) if not new_day else None
+        if not isinstance(stored, dict):
+            # First sighting today: day_start ≈ lifetime at last collection = after − before.
+            # Then today ≈ before (all of current period counted as today).
+            day_start = sub_buckets(after, before)
+            today = sub_buckets(after, day_start)
+            next_day_start[number] = dict(day_start)
         else:
-            prev = after_by_post.get(number)
-            if not isinstance(prev, dict):
-                next_after_by_post[number] = dict(after)
-                today = empty_bucket()
+            day_start = stored
+            # Device wipe / counter reset: re-seed from today's live rows only.
+            if (
+                money(after.get("cash")) < money(day_start.get("cash"))
+                or money(after.get("external")) < money(day_start.get("external"))
+                or money(after.get("discount")) < money(day_start.get("discount"))
+            ):
+                day_start = sub_buckets(after, before)
+                today = sub_buckets(after, day_start)
+                next_day_start[number] = dict(day_start)
             else:
-                if (
-                    money(after.get("cash")) < money(prev.get("cash"))
-                    or money(after.get("external")) < money(prev.get("external"))
-                    or money(after.get("discount")) < money(prev.get("discount"))
-                ):
-                    today = empty_bucket()
-                    next_after_by_post[number] = dict(after)
-                else:
-                    today = sub_buckets(after, prev)
-                    next_after_by_post[number] = dict(prev)
+                today = sub_buckets(after, day_start)
+                next_day_start[number] = dict(day_start)
 
         posts_out.append(
             {
@@ -517,7 +544,7 @@ def build_finance_payload(
 
     wash_state["financeBaseline"] = {
         "date": finance_date,
-        "afterByPost": next_after_by_post,
+        "dayStartByPost": next_day_start,
     }
 
     return {
@@ -1234,6 +1261,7 @@ def run_cycle() -> dict:
                         finance_stats,
                         wash_state,
                         finance_date=finance_date,
+                        finance_timezone=finance_tz,
                         ref_id=ref_id,
                     )
                     if finance:
@@ -1241,6 +1269,8 @@ def run_cycle() -> dict:
                         finance_summary = {
                             "date": finance.get("date"),
                             "today": finance.get("today"),
+                            "before_collection": finance.get("before_collection"),
+                            "after_collection": finance.get("after_collection"),
                             "posts": len(finance.get("posts") or []),
                         }
                 try:
