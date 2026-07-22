@@ -874,6 +874,27 @@ def resolve_geo(wid: str, entry: dict[str, Any]) -> tuple[float, float, str]:
     return lat_f, lng_f, city
 
 
+def geo_changed(
+    wash_state: dict[str, Any], lat: float, lng: float, city: str, *, eps: float = 1e-7
+) -> bool:
+    """True if lat/lng/city differ from last successfully patched geo for this wash."""
+    prev = wash_state.get("lastGeo")
+    if not isinstance(prev, dict):
+        return True
+    try:
+        prev_lat = float(prev.get("lat"))
+        prev_lng = float(prev.get("lng"))
+    except (TypeError, ValueError):
+        return True
+    if abs(prev_lat - lat) > eps or abs(prev_lng - lng) > eps:
+        return True
+    return str(prev.get("city") or "").strip() != city.strip()
+
+
+def remember_geo(wash_state: dict[str, Any], lat: float, lng: float, city: str) -> None:
+    wash_state["lastGeo"] = {"lat": lat, "lng": lng, "city": city}
+
+
 def resolve_wash_type(entry: dict[str, Any]) -> str:
     wash_type = str(entry.get("type") or "self_service").strip() or "self_service"
     return wash_type if wash_type in ("self_service", "robot", "manual") else "self_service"
@@ -1101,7 +1122,8 @@ def ensure_remote_wash(
     save_mapping(mapping)
     wash_state["externalIdSet"] = True
     wash_state["mapsExternalId"] = external_uuid
-    log(f"created remote wash crm={wid} → maps={remote_id} external_id={external_uuid}")
+    remember_geo(wash_state, lat, lng, city)
+    log(f"created remote wash crm={wid} → maps={remote_id} external_id={external_uuid} geo=({lat},{lng})")
     return remote_id, ext_ref, external_uuid
 
 
@@ -1195,6 +1217,8 @@ def run_cycle() -> dict:
             )
 
             patch_body: dict[str, Any] = {}
+            geo_lat = geo_lng = None
+            geo_city = ""
             if sync_card:
                 patch_body["name"] = str(wash.get("name") or f"Мойка {wid}")
                 patch_body["address"] = str(wash.get("address") or "Адрес не указан")
@@ -1202,11 +1226,15 @@ def run_cycle() -> dict:
                     patch_body["description"] = str(wash.get("description"))
                 patch_body["type"] = resolve_wash_type(entry)
                 try:
-                    lat, lng, city = resolve_geo(wid, entry)
-                    patch_body["latitude"] = lat
-                    patch_body["longitude"] = lng
-                    if city:
-                        patch_body["city"] = city
+                    geo_lat, geo_lng, geo_city = resolve_geo(wid, entry)
+                    # Only send coordinates when they actually change for THIS wash.
+                    # Re-sending lat/lng on every news/price patch makes the site treat
+                    # it as a coordinate change (and look like washes share one point).
+                    if geo_changed(wash_state, geo_lat, geo_lng, geo_city):
+                        patch_body["latitude"] = geo_lat
+                        patch_body["longitude"] = geo_lng
+                        if geo_city:
+                            patch_body["city"] = geo_city
                 except ValueError:
                     pass
             if sync_prices and service_modes:
@@ -1246,8 +1274,15 @@ def run_cycle() -> dict:
                     client.patch_wash(wash_ref, patch_body)
                     wash_state["contentFp"] = fp
                     wash_state["lastPatchAt"] = now.isoformat()
+                    if "latitude" in patch_body and geo_lat is not None and geo_lng is not None:
+                        remember_geo(wash_state, geo_lat, geo_lng, geo_city)
+                        log(
+                            f"patched maps={remote_id} ref={wash_ref} crm={wid} "
+                            f"geo=({geo_lat},{geo_lng}) city={geo_city or '—'}"
+                        )
+                    else:
+                        log(f"patched maps={remote_id} ref={wash_ref} crm={wid}")
                     patched = True
-                    log(f"patched maps={remote_id} ref={wash_ref} crm={wid}")
                 except Exception as patch_err:  # noqa: BLE001
                     err_text = str(patch_err)
                     errors.append({"crmWashId": wid, "error": f"patch: {err_text}", "name": wash.get("name")})

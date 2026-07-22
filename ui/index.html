@@ -185,34 +185,34 @@
             '</span></div>' +
             '<div class="wm-wash-fields">' +
             '<div class="wm-field">' +
-            '<label class="wm-field-label">' +
+            '<label class="wm-field-label" for="wash-' + WashModule.escapeHtml(id) + '-lat">' +
             WashModule.escapeHtml(WashModule.t({ ru: 'Широта', en: 'Latitude' })) +
             '</label>' +
-            '<input class="wm-input" type="number" step="any" data-field="latitude" value="' +
+            '<input class="wm-input" id="wash-' + WashModule.escapeHtml(id) + '-lat" name="wash_' + WashModule.escapeHtml(id) + '_latitude" type="number" step="any" data-field="latitude" autocomplete="off" value="' +
             WashModule.escapeHtml(lat === null || lat === undefined ? '' : String(lat)) +
             '" />' +
             '</div>' +
             '<div class="wm-field">' +
-            '<label class="wm-field-label">' +
+            '<label class="wm-field-label" for="wash-' + WashModule.escapeHtml(id) + '-lng">' +
             WashModule.escapeHtml(WashModule.t({ ru: 'Долгота', en: 'Longitude' })) +
             '</label>' +
-            '<input class="wm-input" type="number" step="any" data-field="longitude" value="' +
+            '<input class="wm-input" id="wash-' + WashModule.escapeHtml(id) + '-lng" name="wash_' + WashModule.escapeHtml(id) + '_longitude" type="number" step="any" data-field="longitude" autocomplete="off" value="' +
             WashModule.escapeHtml(lng === null || lng === undefined ? '' : String(lng)) +
             '" />' +
             '</div>' +
             '<div class="wm-field">' +
-            '<label class="wm-field-label">' +
+            '<label class="wm-field-label" for="wash-' + WashModule.escapeHtml(id) + '-city">' +
             WashModule.escapeHtml(WashModule.t({ ru: 'Город', en: 'City' })) +
             '</label>' +
-            '<input class="wm-input" type="text" data-field="city" value="' +
+            '<input class="wm-input" id="wash-' + WashModule.escapeHtml(id) + '-city" name="wash_' + WashModule.escapeHtml(id) + '_city" type="text" data-field="city" autocomplete="off" value="' +
             WashModule.escapeHtml(String(city || '')) +
             '" />' +
             '</div>' +
             '<div class="wm-field">' +
-            '<label class="wm-field-label">' +
+            '<label class="wm-field-label" for="wash-' + WashModule.escapeHtml(id) + '-type">' +
             WashModule.escapeHtml(WashModule.t({ ru: 'Тип мойки', en: 'Wash type' })) +
             '</label>' +
-            '<select class="wm-input" data-field="type">' +
+            '<select class="wm-input" id="wash-' + WashModule.escapeHtml(id) + '-type" name="wash_' + WashModule.escapeHtml(id) + '_type" data-field="type">' +
             typeOptions +
             '</select>' +
             '</div></div></article>'
@@ -295,7 +295,7 @@
           <div class="wm-washes-head">
             <div>
               <h3 class="wm-settings-title" style="font-size:0.95rem;margin:0">${WashModule.t({ ru: 'Мойки', en: 'Washes' })}</h3>
-              <p class="wm-field-hint" style="margin:0.25rem 0 0">${WashModule.t({ ru: 'Список из CRM. У каждой мойки — свои координаты, город и тип. Адрес берётся из карточки мойки в CRM.', en: 'List from CRM. Each wash has its own coordinates, city and type. Address comes from the CRM wash card.' })}</p>
+              <p class="wm-field-hint" style="margin:0.25rem 0 0">${WashModule.t({ ru: 'Список из CRM. У каждой мойки — свои координаты, город и тип (не копируйте одни и те же). Адрес берётся из карточки мойки в CRM.', en: 'List from CRM. Each wash needs its own coordinates, city and type (do not reuse the same point). Address comes from the CRM wash card.' })}</p>
             </div>
             <button type="button" class="wm-btn wm-btn-ghost" id="wm-refresh-washes">${WashModule.t({ ru: 'Обновить список', en: 'Refresh list' })}</button>
           </div>
