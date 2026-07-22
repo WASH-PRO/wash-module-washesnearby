@@ -74,6 +74,8 @@ Dashboard → Автоматизация → Модули → **Автомойк
 PYTHONPATH=src python3 -m unittest tests.test_finance -v
 ```
 
+> PyOrchestrator загружает только `src/main.py` — логика кассы встроена в этот файл.
+
 ## Файлы данных
 
 | Файл | Назначение |

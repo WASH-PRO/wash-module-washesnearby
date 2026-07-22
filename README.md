@@ -76,6 +76,8 @@ Requires PyOrchestrator and CRM washes with `mapsExternalId`.
 PYTHONPATH=src python3 -m unittest tests.test_finance -v
 ```
 
+> PyOrchestrator uploads only `src/main.py` — finance helpers live in that file (not a separate module).
+
 ## Data files
 
 | File | Purpose |
