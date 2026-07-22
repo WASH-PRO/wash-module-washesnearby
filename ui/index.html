@@ -264,8 +264,8 @@
       refreshInterval: 12000,
       title: { ru: 'Автомойки рядом', en: 'Washes Nearby' },
       subtitle: {
-        ru: 'Публикует мойки на сайт «Автомойки рядом» по UUID (mapsExternalId): цены, занятость постов, новости и акции.',
-        en: 'Publishes washes to Washes Nearby using CRM UUID (mapsExternalId): prices, post occupancy, news and promotions.',
+        ru: 'Публикует мойки на сайт «Автомойки рядом»: цены, занятость, новости/акции и кассу (finance).',
+        en: 'Publishes washes to Washes Nearby: prices, occupancy, news/promos and cash register (finance).',
       },
       settingsHtml: `
         <div class="wm-field wm-field--full">
@@ -286,6 +286,11 @@
           <label class="wm-field-label" for="news_limit">${WashModule.t({ ru: 'Лимит новостей и акций', en: 'News & promo limit' })}</label>
           <input class="wm-input" id="news_limit" type="number" name="news_limit" min="1" max="50" />
         </div>
+        <div class="wm-field wm-field--full">
+          <label class="wm-field-label" for="finance_timezone">${WashModule.t({ ru: 'Часовой пояс кассы', en: 'Finance timezone' })}</label>
+          <input class="wm-input" id="finance_timezone" type="text" name="finance_timezone" placeholder="Asia/Yekaterinburg" />
+          <span class="wm-field-hint">${WashModule.t({ ru: 'IANA-зона для даты finance.date (день в кабинете «Финансы»). 7д/30д считает сайт.', en: 'IANA zone for finance.date (day on the Finance page). 7d/30d are summed by the site.' })}</span>
+        </div>
         <div class="wm-field wm-field--full wm-washes-section">
           <div class="wm-washes-head">
             <div>
@@ -302,6 +307,7 @@
           maps_api_base: String(form.maps_api_base.value || '').trim(),
           poll_interval: Number(form.poll_interval.value),
           news_limit: Number(form.news_limit.value),
+          finance_timezone: String(form.finance_timezone.value || '').trim() || 'Asia/Yekaterinburg',
           washes: JSON.stringify(collectWashesFromForm(form)),
           // Clear legacy keys so they don't override the per-wash list.
           wash_coords: '',
@@ -319,6 +325,7 @@
         form.maps_api_base.value = settings.maps_api_base ?? 'https://xn----7sb0aeimehj.xn--p1ai';
         form.poll_interval.value = settings.poll_interval ?? 60;
         form.news_limit.value = settings.news_limit ?? 5;
+        form.finance_timezone.value = settings.finance_timezone ?? 'Asia/Yekaterinburg';
         if (settings.owner_api_token) {
           form.owner_api_token.value = '';
           form.owner_api_token.placeholder = WashModule.t({
@@ -359,13 +366,16 @@
         const rows = Array.isArray(snap.results) ? snap.results : [];
         const listHtml = rows.length
           ? `<ul class="wm-list">${rows
-              .map(
-                (r) =>
-                  `<li><strong>${WashModule.escapeHtml(String(r.name || r.crmWashId || '—'))}</strong>
+              .map((r) => {
+                const fin = r.finance;
+                const finHint = fin && fin.today
+                  ? ` · касса ${WashModule.escapeHtml(String(fin.date || ''))}: нал ${WashModule.escapeHtml(String(fin.today.cash ?? 0))} / внешн ${WashModule.escapeHtml(String(fin.today.external ?? 0))} / скид ${WashModule.escapeHtml(String(fin.today.discount ?? 0))}`
+                  : '';
+                return `<li><strong>${WashModule.escapeHtml(String(r.name || r.crmWashId || '—'))}</strong>
                <span class="wm-field-hint">CRM ${WashModule.escapeHtml(String(r.crmWashId))} → сайт ${WashModule.escapeHtml(String(r.remoteWashId))}
                · занято ${WashModule.escapeHtml(String(r.busy ?? 0))} · свободно ${WashModule.escapeHtml(String(r.free ?? 0))}
-               · офлайн ${WashModule.escapeHtml(String(r.broken ?? 0))} · ext ${WashModule.escapeHtml(String(r.externalId || r.crmWashId || '—'))}</span></li>`
-              )
+               · офлайн ${WashModule.escapeHtml(String(r.broken ?? 0))} · ext ${WashModule.escapeHtml(String(r.externalId || r.crmWashId || '—'))}${finHint}</span></li>`;
+              })
               .join('')}</ul>`
           : `<p class="wm-field-hint">${WashModule.t({ ru: 'Пока нет результатов.', en: 'No results yet.' })}</p>`;
         const errors = Array.isArray(snap.recentErrors) ? snap.recentErrors : [];

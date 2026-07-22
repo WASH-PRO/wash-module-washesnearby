@@ -7,24 +7,46 @@ WASH PRO CRM module: sync car washes to **Washes Nearby** ([Owner Integration AP
 ## What it does
 
 1. Creates a wash on the map site (name + address + coordinates) if there is no mapping yet
-2. Syncs **service modes / prices** — for each work mode, takes the **maximum** price across all posts of that wash (mode names come from CRM work-modes catalog; names are the same across posts)
+2. Syncs **service modes / prices** — for each work mode, takes the **maximum** price across all posts of that wash
 3. Syncs **post occupancy** via telemetry (`free` / `busy` / `broken`)
-4. Syncs latest **news** and **promotions** from CRM Publications (`info-messages`)
+4. Syncs latest **news** and **promotions** from CRM Publications
+5. Syncs **cash register (finance)** in the same telemetry: `today` / `before_collection` / `after_collection` (cash / external / discount), wash + per post
 
 ## CRM UUID ↔ site `external_id`
 
-Each CRM wash has **`mapsExternalId`** (UUID v4). The module sends it to the site as Owner API **`external_id`**:
+Each CRM wash has **`mapsExternalId`** (UUID v4). The module sends it to the site as Owner API **`external_id`**. API calls use `ext:{uuid}`.
 
-| Step | What happens |
-|------|----------------|
-| Create wash in CRM | Dashboard assigns `mapsExternalId` |
-| Existing washes | `init-seed` backfills missing UUIDs |
-| Module sync | Looks up / creates / patches site wash by that UUID |
-| API calls | `PATCH` / telemetry use `ext:{uuid}` |
+## Finance (cash register)
 
-CRM does **not** need the site’s numeric wash id. The module may keep `data/wash_mapping.json` as a cache only.
+Source: CRM **`GET /api/crm/finance-stats`** (MQTT `state/totals` upserted by message-processor).
 
-If a wash has no `mapsExternalId`, the module skips it with an error — update CRM / run `init-seed`, or open the wash in Dashboard and save.
+| Owner field | CRM source |
+|-------------|------------|
+| `before_collection.{cash,external,discount}` | period `before_collection`: `cash`, `cashless`→`external`, `discountOps`→`discount` |
+| `after_collection.*` | period `after_collection` (same field map) |
+| `today.*` | Day delta of **`after_collection`** vs baseline in `data/sync_state.json` (CRM has no daily period) |
+| `posts[].number` | `posts.postNumber` |
+| `date` | Local calendar day in `finance_timezone` (default `Asia/Yekaterinburg`) |
+
+Rules:
+
+- If a wash has no finance-stats rows → **omit** `finance` (do not wipe history with zeros).
+- Wash-level buckets = sum of posts.
+- **Do not** send 7d/30d aggregates — the site sums daily `today_*` itself.
+- Finance rides in the same `PUT .../telemetry` as occupancy (≤ 1/min). Toggle with env/setting `sync_finance` (default on).
+
+Owner check after sync: `GET /api/v1/owner/car-washes/{id}/finance?period=1d|7d|30d`.
+
+Example telemetry curl:
+
+```bash
+export APP=https://xn----7sb0aeimehj.xn--p1ai
+export TOKEN=<owner_api_token>
+curl --http2 -s -X PUT "$APP/api/v1/integration/washes/ext:<mapsExternalId>/telemetry" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":100,"external":200,"discount":10},"after_collection":{"cash":5000,"external":8000,"discount":400},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":100,"external":200,"discount":10},"after_collection":{"cash":5000,"external":8000,"discount":400}}]}}'
+```
 
 ## Settings
 
@@ -32,40 +54,33 @@ If a wash has no `mapsExternalId`, the module skips it with an error — update 
 
 | Key | Description |
 |-----|-------------|
-| `owner_api_token` | Owner API Bearer token (Owner cabinet → API) |
-| `maps_api_base` | Site / API base URL (default punycode `https://xn----7sb0aeimehj.xn--p1ai` = мойка-про.рф). Owner API works over HTTP/2 — the module calls it via `curl --http2`. |
-| `poll_interval` | Seconds (60–120). Site marks wash offline without telemetry after ~3 min; API accepts telemetry ≤ 1/min. |
+| `owner_api_token` | Owner API Bearer token |
+| `maps_api_base` | Site / API URL (HTTP/2 via `curl --http2`) |
+| `poll_interval` | 60–120 s |
 | `news_limit` | Max news / promotions per wash |
+| `finance_timezone` | IANA TZ for `finance.date` (default `Asia/Yekaterinburg`) |
 
 ### Per wash (`washes`)
 
-The settings UI loads CRM washes and shows fields for each one. Stored as:
-
-```json
-{
-  "crmWashId": {
-    "enabled": true,
-    "latitude": 55.16,
-    "longitude": 61.4,
-    "city": "Chelyabinsk",
-    "type": "self_service"
-  }
-}
-```
-
-Address and name come from the CRM wash card. Uncheck `enabled` to skip a wash. Legacy `wash_coords` / default lat-lng / `wash_type` are still read if `washes` is empty.
+UI lists CRM washes; each has `enabled`, `latitude`, `longitude`, `city`, `type`. Address comes from the CRM wash card.
 
 ## Install
 
-Dashboard → Automation → Modules → **Washes Nearby** → Install → Settings → Start.
+Dashboard → Automation → Modules → **Washes Nearby** → Install / Update → Settings → Start.
 
-Requires PyOrchestrator (`PYORCHESTRATOR_ENABLED=true`) and CRM washes with `mapsExternalId`.
+Requires PyOrchestrator and CRM washes with `mapsExternalId`.
+
+## Tests
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_finance -v
+```
 
 ## Data files
 
 | File | Purpose |
 |------|---------|
-| `data/wash_mapping.json` | Optional cache CRM id → numeric site id |
-| `data/sync_state.json` | Content fingerprints and last telemetry time |
-| `data/last_snapshot.json` | Snapshot for UI |
+| `data/wash_mapping.json` | Optional CRM id → numeric site id cache |
+| `data/sync_state.json` | Content fingerprints, telemetry time, finance day baseline |
+| `data/last_snapshot.json` | UI snapshot |
 | `data/settings.json` | Module settings |

@@ -22,19 +22,26 @@
   <h2>Setup</h2>
   <ol>
     <li>Get an Owner API token in the Washes Nearby owner cabinet.</li>
-    <li>Set the site / API URL, send interval, and news/promo limit.</li>
-    <li>In the Washes block, set latitude, longitude, city and type for each CRM wash. Address comes from the CRM wash card.</li>
-    <li>Uncheck a wash to skip syncing it.</li>
+    <li>Set the site / API URL, send interval, news limit, and finance timezone.</li>
+    <li>In the Washes block, set coordinates, city and type for each CRM wash.</li>
     <li>Save and start the module.</li>
   </ol>
 
+  <h2>Finance (cash register)</h2>
+  <p>Every telemetry cycle (≥ 60 s) the module reads <code>/api/crm/finance-stats</code> and adds a <code>finance</code> block: cash / external / discount for today, before and after collection — wash-level and per post.</p>
+  <ul>
+    <li><code>before_collection</code> / <code>after_collection</code> — live CRM counters (<code>cash</code>, <code>cashless</code>→<code>external</code>, <code>discountOps</code>→<code>discount</code>).</li>
+    <li><code>today</code> — day growth of cumulative <code>after_collection</code> in the configured timezone.</li>
+    <li><strong>7-day</strong> and <strong>30-day</strong> views on the site are summed from daily <code>today</code> — the module does not send those aggregates.</li>
+  </ul>
+
   <h2>Prices</h2>
-  <p>For each work mode code, the module reads <code>posts.settings.modePrices</code> on every post of the wash and sends the <strong>maximum</strong> price. Mode names come from <code>/api/crm/work-modes</code>.</p>
+  <p>For each work mode code, the module sends the <strong>maximum</strong> price across posts. Names come from <code>/api/crm/work-modes</code>.</p>
 
   <h2>Occupancy</h2>
-  <p>Telemetry sends post status every cycle (≥ 60 s). Prices are updated via PATCH only when content changes, to avoid re-moderation every minute.</p>
+  <p>Telemetry sends post status every cycle (≥ 60 s). Prices update via PATCH only when content changes.</p>
 
   <h2>News &amp; promotions</h2>
-  <p>From CRM Publications: <code>news</code>/<code>general</code> → news, <code>promotion</code> → promotions. Only scheduled/published items with <code>publishedAt</code> in the past.</p>
+  <p>From CRM Publications: <code>news</code>/<code>general</code> → news, <code>promotion</code> → promotions.</p>
 </body>
 </html>

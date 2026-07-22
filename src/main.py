@@ -17,6 +17,12 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
+from finance import (
+    DEFAULT_FINANCE_TIMEZONE,
+    build_finance_payload,
+    local_finance_date,
+)
+
 MODULE_ID = "washesnearby"
 LOG_PREFIX = "[washesnearby]"
 
@@ -222,6 +228,23 @@ def crm_list(path: str) -> list[dict]:
     if isinstance(data, list):
         return [row for row in data if isinstance(row, dict)]
     return []
+
+
+def crm_list_all(path: str, *, page_size: int = 100, max_pages: int = 50) -> list[dict]:
+    """Page through a CRM list endpoint until exhausted."""
+    base = path.split("?", 1)[0]
+    query = path.split("?", 1)[1] if "?" in path else ""
+    params = urllib.parse.parse_qs(query, keep_blank_values=True)
+    rows: list[dict] = []
+    for page in range(1, max_pages + 1):
+        params["page"] = [str(page)]
+        params["limit"] = [str(page_size)]
+        qs = urllib.parse.urlencode({k: v[0] for k, v in params.items()})
+        chunk = crm_list(f"{base}?{qs}")
+        rows.extend(chunk)
+        if len(chunk) < page_size:
+            break
+    return rows
 
 
 def to_ascii_url(url: str) -> str:
@@ -784,7 +807,17 @@ def run_cycle() -> dict:
         "false",
         "no",
     )
+    sync_finance = pick_str(settings, "sync_finance", "SYNC_FINANCE", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    finance_tz = (
+        pick_str(settings, "finance_timezone", "FINANCE_TIMEZONE", DEFAULT_FINANCE_TIMEZONE)
+        or DEFAULT_FINANCE_TIMEZONE
+    )
     now = datetime.now(timezone.utc)
+    finance_date = local_finance_date(finance_tz, now)
     client = MapsClient(maps_base, token)
     mapping = load_mapping()
     washes_cfg = load_washes_config(settings)
@@ -797,6 +830,7 @@ def run_cycle() -> dict:
     states = crm_list("/api/crm/post-states?limit=500")
     work_mode_rows = crm_list("/api/crm/work-modes?limit=100")
     messages = crm_list("/api/crm/info-messages?limit=500")
+    finance_stats = crm_list_all("/api/crm/finance-stats") if sync_finance else []
 
     work_modes = {
         str(m.get("code")): str(m.get("name") or m.get("code"))
@@ -896,6 +930,7 @@ def run_cycle() -> dict:
                     log(f"patch error crm={wid}: {err_text}")
 
             telemetry_result = None
+            finance_summary = None
             last_tel = parse_dt(wash_state.get("lastTelemetryAt"))
             can_tel = (not last_tel) or (now.timestamp() - last_tel.timestamp() >= 55)
             if sync_telemetry and posts_payload and can_tel:
@@ -903,6 +938,23 @@ def run_cycle() -> dict:
                     "status": "open",
                     "posts": posts_payload,
                 }
+                finance = None
+                if sync_finance:
+                    finance = build_finance_payload(
+                        wid,
+                        wash_posts,
+                        finance_stats,
+                        wash_state,
+                        finance_date=finance_date,
+                        ref_id=ref_id,
+                    )
+                    if finance:
+                        tel_body["finance"] = finance
+                        finance_summary = {
+                            "date": finance.get("date"),
+                            "today": finance.get("today"),
+                            "posts": len(finance.get("posts") or []),
+                        }
                 try:
                     # Prices only via PATCH to avoid re-moderation every minute
                     telemetry_result = client.put_telemetry(wash_ref, tel_body)
@@ -916,10 +968,20 @@ def run_cycle() -> dict:
                         if isinstance(telemetry_result, dict)
                         else None
                     )
+                    today = (finance or {}).get("today") or {}
                     log(
                         f"telemetry maps={remote_id} ref={wash_ref} ignored={ignored} "
                         f"busy={status_counts['busy']} free={status_counts['free']} "
                         f"broken={status_counts['broken']} load={load}"
+                        + (
+                            f" finance_date={finance.get('date')} "
+                            f"today_cash={today.get('cash', 0)} "
+                            f"today_external={today.get('external', 0)} "
+                            f"today_discount={today.get('discount', 0)} "
+                            f"finance_posts={len(finance.get('posts') or [])}"
+                            if finance
+                            else ""
+                        )
                     )
                 except Exception as tel_err:  # noqa: BLE001
                     err_text = str(tel_err)
@@ -945,6 +1007,7 @@ def run_cycle() -> dict:
                     "news": len(news),
                     "promotions": len(promos),
                     "patched": patched,
+                    "finance": finance_summary,
                     "telemetry": telemetry_result,
                 }
             )
@@ -961,6 +1024,8 @@ def run_cycle() -> dict:
         "mapsApiBase": maps_base,
         "configured": bool(token),
         "pollInterval": poll_interval,
+        "financeDate": finance_date,
+        "financeTimezone": finance_tz,
         "crmWashCount": len(washes),
         "skippedCount": skipped,
         "mappedCount": len(mapping),
