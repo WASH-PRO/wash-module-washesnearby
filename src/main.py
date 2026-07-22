@@ -741,9 +741,13 @@ class MapsClient:
             for row in data:
                 if isinstance(row, dict) and str(row.get("external_id") or "") == str(external_id):
                     return row
-            if data and isinstance(data[0], dict):
-                return data[0]
+            # Never fall back to data[0] — that can attach the wrong wash when the
+            # filter is empty/misparsed and return another owner's site listing.
         return None
+
+    def get_wash(self, wash_ref: int | str) -> dict | None:
+        data = self.request("GET", f"/api/v1/integration/washes/{wash_ref}")
+        return data if isinstance(data, dict) else None
 
     def patch_wash(self, wash_ref: int | str, body: dict) -> Any:
         return self.request("PATCH", f"/api/v1/integration/washes/{wash_ref}", body)
@@ -840,11 +844,12 @@ def load_washes_config(settings: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def wash_entry(washes_cfg: dict[str, dict[str, Any]], wid: str) -> dict[str, Any]:
+    """Per-wash settings only. Do NOT inherit shared __defaults__ geo — that made
+    every wash without its own row receive the same lat/lng and overwrite each other."""
     entry = washes_cfg.get(wid) or washes_cfg.get(str(wid))
     if isinstance(entry, dict):
-        return entry
-    defaults = washes_cfg.get("__defaults__")
-    return defaults if isinstance(defaults, dict) else {}
+        return dict(entry)
+    return {}
 
 
 def wash_enabled(entry: dict[str, Any]) -> bool:
@@ -893,6 +898,34 @@ def geo_changed(
 
 def remember_geo(wash_state: dict[str, Any], lat: float, lng: float, city: str) -> None:
     wash_state["lastGeo"] = {"lat": lat, "lng": lng, "city": city}
+
+
+def seed_last_geo_from_remote(
+    client: "MapsClient",
+    wash_ref: str,
+    wash_state: dict[str, Any],
+) -> None:
+    """After restart lastGeo is empty — learn current site coords so we don't re-PATCH
+    identical lat/lng (which used to force pending moderation every cycle)."""
+    if isinstance(wash_state.get("lastGeo"), dict):
+        return
+    try:
+        remote = client.get_wash(wash_ref)
+    except Exception as err:  # noqa: BLE001
+        log(f"seed geo get_wash {wash_ref}: {err}")
+        return
+    if not isinstance(remote, dict):
+        return
+    try:
+        lat = float(remote.get("latitude"))
+        lng = float(remote.get("longitude"))
+    except (TypeError, ValueError):
+        return
+    if lat == 0 and lng == 0:
+        return
+    city = str(remote.get("city") or "").strip()
+    remember_geo(wash_state, lat, lng, city)
+    log(f"seeded lastGeo from remote {wash_ref}: ({lat},{lng})")
 
 
 def resolve_wash_type(entry: dict[str, Any]) -> str:
@@ -1087,17 +1120,43 @@ def ensure_remote_wash(
 
     if wid in mapping:
         remote_id = mapping[wid]
-        if not wash_state.get("externalIdSet") or wash_state.get("mapsExternalId") != external_uuid:
-            try:
-                client.patch_wash(remote_id, {"external_id": external_uuid})
+        # Stale mapping can point at another wash. Never overwrite that wash's
+        # external_id with ours — that stole identity between two CRM washes.
+        try:
+            mapped = client.get_wash(remote_id)
+        except Exception as err:  # noqa: BLE001
+            log(f"mapping verify maps={remote_id} crm={wid}: {err}")
+            mapped = None
+
+        mapped_ext = str((mapped or {}).get("external_id") or "").strip()
+        if not mapped:
+            log(f"stale mapping crm={wid}→maps={remote_id} missing on site; drop cache")
+            del mapping[wid]
+            save_mapping(mapping)
+        elif mapped_ext and mapped_ext != external_uuid:
+            log(
+                f"stale mapping crm={wid}→maps={remote_id} belongs to external_id={mapped_ext}; "
+                f"drop cache, resolve uuid={external_uuid}"
+            )
+            del mapping[wid]
+            save_mapping(mapping)
+        else:
+            if not mapped_ext:
+                try:
+                    client.patch_wash(remote_id, {"external_id": external_uuid})
+                    log(f"set external_id uuid={external_uuid} on maps={remote_id} crm={wid}")
+                except Exception as err:  # noqa: BLE001
+                    log(f"set external_id failed crm={wid} maps={remote_id}: {err}")
+                    # Fall through to create/find by uuid rather than patching wrong target.
+                    del mapping[wid]
+                    save_mapping(mapping)
+                    mapped = None
+            if mapped is not None:
                 wash_state["externalIdSet"] = True
                 wash_state["mapsExternalId"] = external_uuid
-                log(f"set external_id uuid={external_uuid} on maps={remote_id} crm={wid}")
+                mapping[wid] = remote_id
+                save_mapping(mapping)
                 return remote_id, ext_ref, external_uuid
-            except Exception as err:  # noqa: BLE001
-                log(f"set external_id failed crm={wid} maps={remote_id}: {err}")
-                return remote_id, str(remote_id), external_uuid
-        return remote_id, ext_ref, external_uuid
 
     lat, lng, city = resolve_geo(wid, wash_cfg)
     body: dict[str, Any] = {
@@ -1215,6 +1274,7 @@ def run_cycle() -> dict:
                 service_modes,
                 wash_state,
             )
+            seed_last_geo_from_remote(client, wash_ref, wash_state)
 
             patch_body: dict[str, Any] = {}
             geo_lat = geo_lng = None
@@ -1228,15 +1288,15 @@ def run_cycle() -> dict:
                 try:
                     geo_lat, geo_lng, geo_city = resolve_geo(wid, entry)
                     # Only send coordinates when they actually change for THIS wash.
-                    # Re-sending lat/lng on every news/price patch makes the site treat
+                    # Re-sending lat/lng on every news/price patch made the site treat
                     # it as a coordinate change (and look like washes share one point).
                     if geo_changed(wash_state, geo_lat, geo_lng, geo_city):
                         patch_body["latitude"] = geo_lat
                         patch_body["longitude"] = geo_lng
                         if geo_city:
                             patch_body["city"] = geo_city
-                except ValueError:
-                    pass
+                except ValueError as geo_err:
+                    log(f"geo skip crm={wid}: {geo_err}")
             if sync_prices and service_modes:
                 patch_body["service_modes"] = service_modes
             if sync_news:

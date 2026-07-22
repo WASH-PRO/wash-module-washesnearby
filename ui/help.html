@@ -38,6 +38,10 @@
   <h2>Prices</h2>
   <p>For each work mode code, the module sends the <strong>maximum</strong> price across posts. Names come from <code>/api/crm/work-modes</code>.</p>
 
+  <h2>Coordinates</h2>
+  <p>Set latitude/longitude <strong>per wash</strong> in the list. Shared default coordinates are no longer applied automatically — that used to make two washes share one map point.</p>
+  <p>The module only PATCHes coordinates when they change for that wash. Re-sending the same lat/lng should not force moderation again.</p>
+
   <h2>Occupancy</h2>
   <p>Telemetry sends post status every cycle (≥ 60 s). Prices update via PATCH only when content changes.</p>
 
