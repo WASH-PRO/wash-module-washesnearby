@@ -24,7 +24,7 @@
 |----------------|--------------|
 | `before_collection.{cash,external,discount}` | period `before_collection`: `cash`, `cashless`→`external`, `discountOps`→`discount` |
 | `after_collection.*` | period `after_collection` |
-| `today.*` | Только из записей **за сегодня** (`recordedAt` в `finance_timezone`). При первом снимке дня: `today ≈ before_collection`. Дальше копится новый оборот. **Вчерашний день не нужен.** |
+| `today.*` | Из **сегодняшних** `finance-stats`: `today = before_collection` (текущий период). При инкассации днём предыдущий `before` суммируется. **Не** `after − before` (поля `a*`/`t*` могут расходиться). Вчера не нужен. |
 | `posts[].number` | `posts.postNumber` |
 | `date` | Локальный день в `finance_timezone` (по умолчанию `Asia/Yekaterinburg`) |
 

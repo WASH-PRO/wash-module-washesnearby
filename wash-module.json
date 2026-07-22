@@ -8,7 +8,7 @@
     "ru": "Создаёт мойки на сайте «Автомойки рядом» по UUID (mapsExternalId); синхронизирует цены, занятость, новости/акции и кассу (finance) в telemetry.",
     "en": "Creates washes on Washes Nearby using CRM UUID (mapsExternalId); syncs prices, occupancy, news/promos and cash register (finance) via telemetry."
   },
-  "version": "1.2.3",
+  "version": "1.2.4",
   "author": "WASH-PRO",
   "license": "MIT",
   "category": "publishing",

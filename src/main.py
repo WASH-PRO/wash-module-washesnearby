@@ -409,6 +409,15 @@ def latest_finance_by_post(
     return by_key
 
 
+def bucket_decreased(current: dict[str, float], previous: dict[str, float]) -> bool:
+    """True if any money field dropped — typical after инкассация / counter reset."""
+    return (
+        money(current.get("cash")) < money(previous.get("cash"))
+        or money(current.get("external")) < money(previous.get("external"))
+        or money(current.get("discount")) < money(previous.get("discount"))
+    )
+
+
 def local_finance_date(tz_name: str, now: datetime | None = None) -> str:
     """Calendar YYYY-MM-DD in wash/CRM working timezone (not UTC-blind)."""
     now = now or datetime.now(timezone.utc)
@@ -452,12 +461,13 @@ def build_finance_payload(
     """
     Build Owner Integration `finance` block from CRM `/api/crm/finance-stats`.
 
-    CRM has no day ledger — only live before/after counters (updated today).
-    - Use only rows whose recordedAt falls on finance_date (local TZ).
-    - today = after_collection − day_start, where day_start is fixed on first
-      sighting of the calendar day as (after − before). That equals before_collection
-      at first sync and then accumulates new revenue — no yesterday required.
-    - cashless → external
+    CRM has no day ledger — only live counters updated today:
+    - before_collection (a*): current period since last collection
+    - after_collection (t*): lifetime / panel totals (may be lower per-field than before!)
+
+    today = sum of today's before_collection periods (no yesterday):
+    - normally today == before_collection
+    - if инкассация mid-day resets before, previous before is banked into collectedByPost
 
     Returns None when this wash has no today's finance-stats rows.
     """
@@ -480,13 +490,16 @@ def build_finance_payload(
     if not isinstance(baseline, dict):
         baseline = {}
     baseline_date = str(baseline.get("date") or "")
-    # dayStartByPost: lifetime counters at local day start (after − before on first sighting).
-    day_start_by_post = baseline.get("dayStartByPost")
-    if not isinstance(day_start_by_post, dict):
-        day_start_by_post = {}
+    collected_by_post = baseline.get("collectedByPost")
+    if not isinstance(collected_by_post, dict):
+        collected_by_post = {}
+    last_before_by_post = baseline.get("lastBeforeByPost")
+    if not isinstance(last_before_by_post, dict):
+        last_before_by_post = {}
 
     new_day = baseline_date != finance_date
-    next_day_start: dict[str, dict[str, float]] = {}
+    next_collected: dict[str, dict[str, float]] = {}
+    next_last_before: dict[str, dict[str, float]] = {}
     posts_out: list[dict[str, Any]] = []
 
     ordered = sorted(wash_posts, key=lambda p: int(p.get("postNumber") or 0))
@@ -508,27 +521,22 @@ def build_finance_payload(
         before = bucket_from_crm_row(before_row)
         after = bucket_from_crm_row(after_row)
 
-        stored = day_start_by_post.get(number) if not new_day else None
-        if not isinstance(stored, dict):
-            # First sighting today: day_start ≈ lifetime at last collection = after − before.
-            # Then today ≈ before (all of current period counted as today).
-            day_start = sub_buckets(after, before)
-            today = sub_buckets(after, day_start)
-            next_day_start[number] = dict(day_start)
+        if new_day:
+            collected = empty_bucket()
+            today = dict(before)
         else:
-            day_start = stored
-            # Device wipe / counter reset: re-seed from today's live rows only.
-            if (
-                money(after.get("cash")) < money(day_start.get("cash"))
-                or money(after.get("external")) < money(day_start.get("external"))
-                or money(after.get("discount")) < money(day_start.get("discount"))
-            ):
-                day_start = sub_buckets(after, before)
-                today = sub_buckets(after, day_start)
-                next_day_start[number] = dict(day_start)
-            else:
-                today = sub_buckets(after, day_start)
-                next_day_start[number] = dict(day_start)
+            collected_raw = collected_by_post.get(number)
+            collected = (
+                dict(collected_raw) if isinstance(collected_raw, dict) else empty_bucket()
+            )
+            last_raw = last_before_by_post.get(number)
+            if isinstance(last_raw, dict) and bucket_decreased(before, last_raw):
+                # Инкассация: период до сброса уходит в накопление за день.
+                collected = sum_buckets([collected, last_raw])
+            today = sum_buckets([collected, before])
+
+        next_collected[number] = collected
+        next_last_before[number] = dict(before)
 
         posts_out.append(
             {
@@ -544,7 +552,8 @@ def build_finance_payload(
 
     wash_state["financeBaseline"] = {
         "date": finance_date,
-        "dayStartByPost": next_day_start,
+        "collectedByPost": next_collected,
+        "lastBeforeByPost": next_last_before,
     }
 
     return {
