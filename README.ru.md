@@ -18,23 +18,24 @@
 
 ## Касса (finance)
 
-Источник: CRM **`GET /api/crm/finance-stats`** (счётчики MQTT `state/totals` через message-processor).
+Источник: CRM **`GET /api/crm/telemetry?messageType=credit`** — события MQTT `state/credit` (зачисления) за **текущий локальный день**.
 
-| Поле Owner API | Источник CRM |
-|----------------|--------------|
-| `before_collection.{cash,external,discount}` | period `before_collection`: `cash`, `cashless`→`external`, `discountOps`→`discount` |
-| `after_collection.*` | period `after_collection` |
-| `today.*` | Из **сегодняшних** `finance-stats`: `today = before_collection` (текущий период). При инкассации днём предыдущий `before` суммируется. **Не** `after − before` (поля `a*`/`t*` могут расходиться). Вчера не нужен. |
-| `posts[].number` | `posts.postNumber` |
-| `date` | Локальный день в `finance_timezone` (по умолчанию `Asia/Yekaterinburg`) |
+| Поле Owner API | Источник |
+|----------------|----------|
+| `today.cash` | сумма `credit` с `type=0` (наличные) |
+| `today.external` | сумма `credit` с `type=1` (безнал) |
+| `today.discount` | сумма `credit` с `type=2` (скидка) |
+| `before_collection` / `after_collection` | **нули** — счётчики инкассации (`finance-stats` / `state/totals`) **не** отправляются |
+| `posts[].number` | `posts.postNumber` (по `serialNumber` платежа) |
+| `date` | локальный день в `finance_timezone` (по умолчанию `Asia/Yekaterinburg`) |
 
 Правила:
 
-- Нет строк finance-stats у мойки → блок `finance` **не отправляется** (чтобы не затереть историю нулями).
-- Итоги мойки = сумма постов.
-- Агрегаты **7д / 30д модуль не считает** — их суммирует сайт по дневным `today_*`.
-- Касса уходит в том же `PUT .../telemetry`, что и занятость (≤ 1/мин). Выключатель: `sync_finance` (по умолчанию вкл.).
-- `GET /api/crm/finance-stats` требует авторизации: модуль логинится в CRM через `SERVICE_LOGIN` / `SERVICE_PASSWORD` (secrets от modules-bridge).
+- Считаются **только платежи за сегодня**; 7д / 30д суммирует сайт по дневным `today_*`.
+- Итоги мойки = сумма постов. Нет постов → блок `finance` не отправляется.
+- Даже без платежей за день отправляется `today=0` (чтобы сбросить ошибочные накопленные значения).
+- Касса уходит в том же `PUT .../telemetry`, что и занятость (≤ 1/мин). Выключатель: `sync_finance`.
+- Телеметрия требует авторизации: `SERVICE_LOGIN` / `SERVICE_PASSWORD` (secrets от modules-bridge).
 
 Проверка: `GET /api/v1/owner/car-washes/{id}/finance?period=1d|7d|30d`.
 
@@ -46,7 +47,7 @@ export TOKEN=<owner_api_token>
 curl --http2 -s -X PUT "$APP/api/v1/integration/washes/ext:<mapsExternalId>/telemetry" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":100,"external":200,"discount":10},"after_collection":{"cash":5000,"external":8000,"discount":400},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":100,"external":200,"discount":10},"after_collection":{"cash":5000,"external":8000,"discount":400}}]}}'
+  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":0,"external":0,"discount":0},"after_collection":{"cash":0,"external":0,"discount":0},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":0,"external":0,"discount":0},"after_collection":{"cash":0,"external":0,"discount":0}}]}}'
 ```
 
 ## Настройки

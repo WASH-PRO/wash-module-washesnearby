@@ -18,25 +18,26 @@ Each CRM wash has **`mapsExternalId`** (UUID v4). The module sends it to the sit
 
 ## Finance (cash register)
 
-Source: CRM **`GET /api/crm/finance-stats`** (MQTT `state/totals` upserted by message-processor).
+Source: CRM **`GET /api/crm/telemetry?messageType=credit`** — MQTT `state/credit` payment events for the **current local day**.
 
-| Owner field | CRM source |
-|-------------|------------|
-| `before_collection.{cash,external,discount}` | period `before_collection`: `cash`, `cashless`→`external`, `discountOps`→`discount` |
-| `after_collection.*` | period `after_collection` (same field map) |
-| `today.*` | Из **сегодняшних** `finance-stats`: `today = before_collection` (текущий период). Если днём была инкассация — предыдущий `before` суммируется. **Не** считать `after − before` (на панели `a*`/`t*` по полям могут расходиться). Вчера не нужен. |
-| `posts[].number` | `posts.postNumber` |
+| Owner field | Source |
+|-------------|--------|
+| `today.cash` | sum of credits with `type=0` (cash) |
+| `today.external` | sum of credits with `type=1` (cashless) |
+| `today.discount` | sum of credits with `type=2` (discount) |
+| `before_collection` / `after_collection` | **zeros** — collection counters (`finance-stats` / `state/totals`) are **not** forwarded |
+| `posts[].number` | `posts.postNumber` (matched via payment `serialNumber`) |
 | `date` | Local calendar day in `finance_timezone` (default `Asia/Yekaterinburg`) |
 
 Rules:
 
-- If a wash has no finance-stats rows → **omit** `finance` (do not wipe history with zeros).
-- Wash-level buckets = sum of posts.
-- **Do not** send 7d/30d aggregates — the site sums daily `today_*` itself.
-- Finance rides in the same `PUT .../telemetry` as occupancy (≤ 1/min). Toggle with env/setting `sync_finance` (default on).
-- `GET /api/crm/finance-stats` is authenticated: the module logs in with CRM `SERVICE_LOGIN` / `SERVICE_PASSWORD` (injected by modules-bridge).
+- Only **today’s payments**; 7d / 30d are summed by the site from daily `today_*`.
+- Wash totals = sum of posts. No posts → omit `finance`.
+- Even with no payments yet, send `today=0` so stale counter-based values get cleared.
+- Finance rides in the same `PUT .../telemetry` as occupancy (≤ 1/min). Toggle: `sync_finance`.
+- Telemetry list requires auth: `SERVICE_LOGIN` / `SERVICE_PASSWORD` (modules-bridge secrets).
 
-Owner check after sync: `GET /api/v1/owner/car-washes/{id}/finance?period=1d|7d|30d`.
+Owner check: `GET /api/v1/owner/car-washes/{id}/finance?period=1d|7d|30d`.
 
 Example telemetry curl:
 
@@ -46,7 +47,7 @@ export TOKEN=<owner_api_token>
 curl --http2 -s -X PUT "$APP/api/v1/integration/washes/ext:<mapsExternalId>/telemetry" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":100,"external":200,"discount":10},"after_collection":{"cash":5000,"external":8000,"discount":400},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":100,"external":200,"discount":10},"after_collection":{"cash":5000,"external":8000,"discount":400}}]}}'
+  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":0,"external":0,"discount":0},"after_collection":{"cash":0,"external":0,"discount":0},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":0,"external":0,"discount":0},"after_collection":{"cash":0,"external":0,"discount":0}}]}}'
 ```
 
 ## Settings
