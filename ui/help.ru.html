@@ -28,10 +28,10 @@
   </ol>
 
   <h2>Касса (финансы)</h2>
-  <p>В каждом telemetry (раз в ≥ 60 с) модуль суммирует MQTT-зачисления <code>state/credit</code> за <strong>сегодня</strong> из <code>/api/crm/telemetry?messageType=credit</code> и добавляет блок <code>finance.today</code> (наличные / безнал / скидки) — по мойке и по постам.</p>
+  <p>В каждом telemetry (раз в ≥ 60 с) модуль собирает блок <code>finance</code>:</p>
   <ul>
-    <li><code>today</code> — сумма платежей за текущий локальный день (таймзона кассы).</li>
-    <li><code>before_collection</code> / <code>after_collection</code> — нули: счётчики инкассации не отправляются (7д/30д считает сайт по дневным <code>today</code>).</li>
+    <li><code>today</code> — сумма MQTT-зачислений <code>state/credit</code> за текущий локальный день (таймзона кассы). 7д/30д считает сайт.</li>
+    <li><code>before_collection</code> / <code>after_collection</code> — живые счётчики панели из CRM <code>/api/crm/finance-stats</code> (до / после инкассации).</li>
   </ul>
 
   <h2>Цены</h2>

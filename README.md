@@ -18,24 +18,22 @@ Each CRM wash has **`mapsExternalId`** (UUID v4). The module sends it to the sit
 
 ## Finance (cash register)
 
-Source: CRM **`GET /api/crm/telemetry?messageType=credit`** — MQTT `state/credit` payment events for the **current local day**.
-
 | Owner field | Source |
 |-------------|--------|
-| `today.cash` | sum of credits with `type=0` (cash) |
-| `today.external` | sum of credits with `type=1` (cashless) |
-| `today.discount` | sum of credits with `type=2` (discount) |
-| `before_collection` / `after_collection` | **zeros** — collection counters (`finance-stats` / `state/totals`) are **not** forwarded |
-| `posts[].number` | `posts.postNumber` (matched via payment `serialNumber`) |
+| `today.cash` / `external` / `discount` | sum of MQTT `state/credit` for **today** (`type` 0/1/2) |
+| `before_collection` | live CRM `finance-stats` period `before_collection` (acash / anoncash / adiscount) |
+| `after_collection` | same for `after_collection` (tcash / tnoncash / tdiscount) |
+| `posts[].number` | `posts.postNumber` (payments matched via `serialNumber`) |
 | `date` | Local calendar day in `finance_timezone` (default `Asia/Yekaterinburg`) |
 
 Rules:
 
-- Only **today’s payments**; 7d / 30d are summed by the site from daily `today_*`.
+- **`today`** — today’s payments only; 7d / 30d are summed by the site from daily `today_*`.
+- **`before` / `after`** — live panel counters (not day-scoped); shown on the site’s live finance block.
 - Wash totals = sum of posts. No posts → omit `finance`.
-- Even with no payments yet, send `today=0` so stale counter-based values get cleared.
+- Even with no payments yet, send `today=0` (with current before/after).
 - Finance rides in the same `PUT .../telemetry` as occupancy (≤ 1/min). Toggle: `sync_finance`.
-- Telemetry list requires auth: `SERVICE_LOGIN` / `SERVICE_PASSWORD` (modules-bridge secrets).
+- CRM auth required: `SERVICE_LOGIN` / `SERVICE_PASSWORD` (modules-bridge secrets).
 
 Owner check: `GET /api/v1/owner/car-washes/{id}/finance?period=1d|7d|30d`.
 
@@ -47,7 +45,7 @@ export TOKEN=<owner_api_token>
 curl --http2 -s -X PUT "$APP/api/v1/integration/washes/ext:<mapsExternalId>/telemetry" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":0,"external":0,"discount":0},"after_collection":{"cash":0,"external":0,"discount":0},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":0,"external":0,"discount":0},"after_collection":{"cash":0,"external":0,"discount":0}}]}}'
+  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":1300,"external":12550,"discount":64},"after_collection":{"cash":0,"external":0,"discount":0},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":1300,"external":12550,"discount":64},"after_collection":{"cash":0,"external":0,"discount":0}}]}}'
 ```
 
 ## Settings

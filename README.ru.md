@@ -18,24 +18,22 @@
 
 ## Касса (finance)
 
-Источник: CRM **`GET /api/crm/telemetry?messageType=credit`** — события MQTT `state/credit` (зачисления) за **текущий локальный день**.
-
 | Поле Owner API | Источник |
 |----------------|----------|
-| `today.cash` | сумма `credit` с `type=0` (наличные) |
-| `today.external` | сумма `credit` с `type=1` (безнал) |
-| `today.discount` | сумма `credit` с `type=2` (скидка) |
-| `before_collection` / `after_collection` | **нули** — счётчики инкассации (`finance-stats` / `state/totals`) **не** отправляются |
-| `posts[].number` | `posts.postNumber` (по `serialNumber` платежа) |
+| `today.cash` / `external` / `discount` | сумма MQTT `state/credit` за **сегодня** (`type` 0/1/2) |
+| `before_collection` | живые счётчики CRM `finance-stats` периода `before_collection` (acash / anoncash / adiscount) |
+| `after_collection` | то же для `after_collection` (tcash / tnoncash / tdiscount) |
+| `posts[].number` | `posts.postNumber` (платежи — по `serialNumber`) |
 | `date` | локальный день в `finance_timezone` (по умолчанию `Asia/Yekaterinburg`) |
 
 Правила:
 
-- Считаются **только платежи за сегодня**; 7д / 30д суммирует сайт по дневным `today_*`.
+- **`today`** — только платежи за сегодня; 7д / 30д суммирует сайт по дневным `today_*`.
+- **`before` / `after`** — снимок кассы с панели (не «за день»); на сайте показываются в блоке «живые» метрики.
 - Итоги мойки = сумма постов. Нет постов → блок `finance` не отправляется.
-- Даже без платежей за день отправляется `today=0` (чтобы сбросить ошибочные накопленные значения).
+- Даже без платежей за день отправляется `today=0` (и актуальные before/after).
 - Касса уходит в том же `PUT .../telemetry`, что и занятость (≤ 1/мин). Выключатель: `sync_finance`.
-- Телеметрия требует авторизации: `SERVICE_LOGIN` / `SERVICE_PASSWORD` (secrets от modules-bridge).
+- Нужна авторизация CRM: `SERVICE_LOGIN` / `SERVICE_PASSWORD` (secrets от modules-bridge).
 
 Проверка: `GET /api/v1/owner/car-washes/{id}/finance?period=1d|7d|30d`.
 
@@ -47,7 +45,7 @@ export TOKEN=<owner_api_token>
 curl --http2 -s -X PUT "$APP/api/v1/integration/washes/ext:<mapsExternalId>/telemetry" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":0,"external":0,"discount":0},"after_collection":{"cash":0,"external":0,"discount":0},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":0,"external":0,"discount":0},"after_collection":{"cash":0,"external":0,"discount":0}}]}}'
+  -d '{"status":"open","posts":[{"number":"1","status":"free"}],"finance":{"date":"2026-07-22","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":1300,"external":12550,"discount":64},"after_collection":{"cash":0,"external":0,"discount":0},"posts":[{"number":"1","today":{"cash":100,"external":200,"discount":10},"before_collection":{"cash":1300,"external":12550,"discount":64},"after_collection":{"cash":0,"external":0,"discount":0}}]}}'
 ```
 
 ## Настройки

@@ -28,10 +28,10 @@
   </ol>
 
   <h2>Finance (cash register)</h2>
-  <p>Every telemetry cycle (≥ 60 s) the module sums MQTT <code>state/credit</code> payments for <strong>today</strong> from <code>/api/crm/telemetry?messageType=credit</code> and adds <code>finance.today</code> (cash / cashless / discount) — wash-level and per post.</p>
+  <p>Every telemetry cycle (≥ 60 s) the module builds a <code>finance</code> block:</p>
   <ul>
-    <li><code>today</code> — payment sum for the current local day (finance timezone).</li>
-    <li><code>before_collection</code> / <code>after_collection</code> — zeros: collection counters are not sent (7d/30d are summed by the site from daily <code>today</code>).</li>
+    <li><code>today</code> — sum of MQTT <code>state/credit</code> payments for the current local day (finance timezone). 7d/30d are summed by the site.</li>
+    <li><code>before_collection</code> / <code>after_collection</code> — live panel counters from CRM <code>/api/crm/finance-stats</code>.</li>
   </ul>
 
   <h2>Prices</h2>

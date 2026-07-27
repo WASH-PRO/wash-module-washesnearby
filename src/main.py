@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 try:
     from zoneinfo import ZoneInfo
@@ -334,6 +334,25 @@ def empty_bucket() -> dict[str, float]:
     return {"cash": 0.0, "external": 0.0, "discount": 0.0}
 
 
+def bucket_from_crm_row(row: dict[str, Any] | None) -> dict[str, float]:
+    """Map CRM finance-stats / totals row → Owner cash/external/discount bucket."""
+    if not row:
+        return empty_bucket()
+    external = row.get("cashless")
+    if external is None:
+        external = row.get("external")
+    if external is None:
+        external = row.get("card")
+    discount = row.get("discountOps")
+    if discount is None:
+        discount = row.get("discount")
+    return {
+        "cash": money(row.get("cash")),
+        "external": money(external),
+        "discount": money(discount),
+    }
+
+
 def sum_buckets(buckets: list[dict[str, float]]) -> dict[str, float]:
     total = empty_bucket()
     for bucket in buckets:
@@ -341,6 +360,41 @@ def sum_buckets(buckets: list[dict[str, float]]) -> dict[str, float]:
         total["external"] = money(total["external"] + money(bucket.get("external")))
         total["discount"] = money(total["discount"] + money(bucket.get("discount")))
     return total
+
+
+def finance_row_ts(row: dict[str, Any]) -> float:
+    for key in ("recordedAt", "updatedAt", "createdAt"):
+        raw = row.get(key)
+        if not raw or not isinstance(raw, str):
+            continue
+        text = raw.strip().replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).timestamp()
+        except ValueError:
+            continue
+    return 0.0
+
+
+def latest_finance_by_post(
+    stats: list[dict[str, Any]], id_of: Callable[[Any], str]
+) -> dict[str, dict]:
+    """Return map `{postId:period}` → latest finance-stats row."""
+    by_key: dict[str, dict] = {}
+    for row in stats:
+        if not isinstance(row, dict):
+            continue
+        post_key = id_of(row.get("postId"))
+        if not post_key:
+            continue
+        period = str(row.get("period") or "before_collection").strip() or "before_collection"
+        key = f"{post_key}:{period}"
+        prev = by_key.get(key)
+        if not prev or finance_row_ts(row) >= finance_row_ts(prev):
+            by_key[key] = row
+    return by_key
 
 
 def local_finance_date(tz_name: str, now: datetime | None = None) -> str:
@@ -442,25 +496,27 @@ def fetch_today_credits(finance_date: str, finance_timezone: str) -> list[dict]:
 def build_finance_payload(
     wash_posts: list[dict[str, Any]],
     credit_rows: list[dict[str, Any]],
+    finance_stats: list[dict[str, Any]] | None = None,
     *,
     finance_date: str,
+    id_of: Callable[[Any], str] | None = None,
 ) -> dict[str, Any] | None:
     """
-    Build Owner Integration ``finance`` from today's MQTT credit payments.
+    Build Owner Integration ``finance`` block.
 
-    ``today`` = sum of ``state/credit`` events for the local calendar day
-    (cash / cashless / discount). Does **not** use finance-stats counters
-    (before/after collection). Site aggregates 7d/30d from daily ``today_*``.
-
-    ``before_collection`` / ``after_collection`` are sent as zeros — those
-    panel counters are not day-scoped and must not be forwarded as revenue.
+    - ``today`` — sum of MQTT ``state/credit`` payments for the local calendar day
+      (site aggregates 7d/30d from these daily ``today_*`` values).
+    - ``before_collection`` / ``after_collection`` — live panel counters from
+      CRM ``/api/crm/finance-stats`` (acash/anoncash / tcash/tnoncash).
 
     Returns None when the wash has no posts to report.
     """
+    resolve_id = id_of or ref_id
     serial_to_number: dict[str, str] = {}
+    number_to_post_id: dict[str, str] = {}
     ordered = sorted(wash_posts, key=lambda p: int(p.get("postNumber") or 0))
     posts_out: list[dict[str, Any]] = []
-    by_number: dict[str, dict[str, float]] = {}
+    today_by_number: dict[str, dict[str, float]] = {}
 
     for post in ordered:
         number = str(
@@ -471,11 +527,14 @@ def build_finance_payload(
         serial = str(post.get("serialNumber") or "").strip()
         if serial:
             serial_to_number[serial] = number
-        by_number[number] = empty_bucket()
+        pid = resolve_id(post)
+        if pid:
+            number_to_post_id[number] = pid
+        today_by_number[number] = empty_bucket()
         posts_out.append(
             {
                 "number": number,
-                "today": by_number[number],
+                "today": today_by_number[number],
                 "before_collection": empty_bucket(),
                 "after_collection": empty_bucket(),
             }
@@ -494,17 +553,27 @@ def build_finance_payload(
         bucket = parse_credit_payload(row)
         if not bucket:
             continue
-        by_number[number] = sum_buckets([by_number[number], bucket])
+        today_by_number[number] = sum_buckets([today_by_number[number], bucket])
+
+    latest = latest_finance_by_post(finance_stats or [], resolve_id)
 
     for post in posts_out:
-        post["today"] = by_number[post["number"]]
+        number = post["number"]
+        post["today"] = today_by_number[number]
+        pid = number_to_post_id.get(number) or ""
+        if pid:
+            post["before_collection"] = bucket_from_crm_row(
+                latest.get(f"{pid}:before_collection")
+            )
+            post["after_collection"] = bucket_from_crm_row(
+                latest.get(f"{pid}:after_collection")
+            )
 
-    # Drop stale counter baseline from older module versions.
     return {
         "date": finance_date,
         "today": sum_buckets([p["today"] for p in posts_out]),
-        "before_collection": empty_bucket(),
-        "after_collection": empty_bucket(),
+        "before_collection": sum_buckets([p["before_collection"] for p in posts_out]),
+        "after_collection": sum_buckets([p["after_collection"] for p in posts_out]),
         "posts": posts_out,
     }
 
@@ -1174,6 +1243,7 @@ def run_cycle() -> dict:
     work_mode_rows = crm_list("/api/crm/work-modes?limit=100")
     messages = crm_list("/api/crm/info-messages?limit=500")
     credit_rows: list[dict] = []
+    finance_stats: list[dict] = []
     if sync_finance:
         try:
             credit_rows = fetch_today_credits(finance_date, finance_tz)
@@ -1181,6 +1251,12 @@ def run_cycle() -> dict:
         except Exception as err:  # noqa: BLE001
             log(f"credit telemetry unavailable (auth/API): {err}")
             credit_rows = []
+        try:
+            finance_stats = crm_list_all("/api/crm/finance-stats", page_size=200, auth=True)
+            log(f"finance-stats rows={len(finance_stats)}")
+        except Exception as err:  # noqa: BLE001
+            log(f"finance-stats unavailable (auth/API): {err}")
+            finance_stats = []
 
     work_modes = {
         str(m.get("code")): str(m.get("name") or m.get("code"))
@@ -1307,7 +1383,9 @@ def run_cycle() -> dict:
                     finance = build_finance_payload(
                         wash_posts,
                         credit_rows,
+                        finance_stats,
                         finance_date=finance_date,
+                        id_of=ref_id,
                     )
                     if finance:
                         wash_state.pop("financeBaseline", None)
@@ -1334,6 +1412,7 @@ def run_cycle() -> dict:
                         else None
                     )
                     today = (finance or {}).get("today") or {}
+                    before = (finance or {}).get("before_collection") or {}
                     log(
                         f"telemetry maps={remote_id} ref={wash_ref} ignored={ignored} "
                         f"busy={status_counts['busy']} free={status_counts['free']} "
@@ -1343,6 +1422,8 @@ def run_cycle() -> dict:
                             f"today_cash={today.get('cash', 0)} "
                             f"today_external={today.get('external', 0)} "
                             f"today_discount={today.get('discount', 0)} "
+                            f"before_cash={before.get('cash', 0)} "
+                            f"before_external={before.get('external', 0)} "
                             f"finance_posts={len(finance.get('posts') or [])}"
                             if finance
                             else ""

@@ -1,4 +1,4 @@
-"""Unit tests for CRM credit payments → Owner finance mapping."""
+"""Unit tests for CRM credit payments + finance-stats → Owner finance mapping."""
 
 from __future__ import annotations
 
@@ -22,6 +22,24 @@ def credit(serial: str, amount: float, credit_type: int = 0) -> dict:
         "messageType": "credit",
         "payload": {"type": credit_type, "summ": amount},
         "receivedAt": "2026-07-22T10:00:00Z",
+    }
+
+
+def stats_row(
+    post_id: str,
+    period: str,
+    *,
+    cash: float = 0,
+    cashless: float = 0,
+    discount: float = 0,
+) -> dict:
+    return {
+        "postId": post_id,
+        "period": period,
+        "cash": cash,
+        "cashless": cashless,
+        "discountOps": discount,
+        "recordedAt": "2026-07-22T12:00:00Z",
     }
 
 
@@ -62,7 +80,7 @@ class FinanceMappingTests(unittest.TestCase):
             build_finance_payload([], [credit("S1", 50)], finance_date="2026-07-22")
         )
 
-    def test_sums_today_payments_only(self):
+    def test_today_from_credits_before_after_from_stats(self):
         posts = [
             {"id": "p1", "postNumber": 1, "serialNumber": "POST-1", "washId": "wash1"},
             {"id": "p2", "postNumber": 2, "serialNumber": "POST-2", "washId": "wash1"},
@@ -74,31 +92,51 @@ class FinanceMappingTests(unittest.TestCase):
             credit("POST-2", 10, 2),
             credit("OTHER", 999, 0),  # other wash/post — ignored
         ]
-        payload = build_finance_payload(posts, rows, finance_date="2026-07-22")
+        stats = [
+            stats_row("p1", "before_collection", cash=1300, cashless=12550, discount=64),
+            stats_row("p1", "after_collection", cash=0, cashless=0, discount=0),
+            stats_row("p2", "before_collection", cash=200, cashless=300, discount=5),
+            stats_row("p2", "after_collection", cash=10, cashless=20, discount=1),
+        ]
+        payload = build_finance_payload(posts, rows, stats, finance_date="2026-07-22")
         assert payload is not None
         self.assertEqual(payload["date"], "2026-07-22")
         self.assertEqual(
             payload["today"],
             {"cash": 100.0, "external": 250.0, "discount": 10.0},
         )
-        self.assertEqual(payload["before_collection"], empty_bucket())
-        self.assertEqual(payload["after_collection"], empty_bucket())
+        self.assertEqual(
+            payload["before_collection"],
+            {"cash": 1500.0, "external": 12850.0, "discount": 69.0},
+        )
+        self.assertEqual(
+            payload["after_collection"],
+            {"cash": 10.0, "external": 20.0, "discount": 1.0},
+        )
         self.assertEqual(payload["posts"][0]["today"]["cash"], 100.0)
-        self.assertEqual(payload["posts"][0]["today"]["external"], 50.0)
+        self.assertEqual(payload["posts"][0]["before_collection"]["cash"], 1300.0)
+        self.assertEqual(payload["posts"][0]["before_collection"]["external"], 12550.0)
         self.assertEqual(payload["posts"][1]["today"]["external"], 200.0)
-        self.assertEqual(payload["posts"][1]["today"]["discount"], 10.0)
+        self.assertEqual(payload["posts"][1]["before_collection"]["cash"], 200.0)
 
-    def test_zero_today_when_no_credits(self):
+    def test_zero_today_when_no_credits_but_keeps_counters(self):
         posts = [{"id": "p1", "postNumber": 1, "serialNumber": "POST-1"}]
-        payload = build_finance_payload(posts, [], finance_date="2026-07-22")
+        stats = [
+            stats_row("p1", "before_collection", cash=800, cashless=12000, discount=64),
+            stats_row("p1", "after_collection"),
+        ]
+        payload = build_finance_payload(posts, [], stats, finance_date="2026-07-22")
         assert payload is not None
         self.assertEqual(payload["today"], empty_bucket())
+        self.assertEqual(
+            payload["before_collection"],
+            {"cash": 800.0, "external": 12000.0, "discount": 64.0},
+        )
         self.assertEqual(len(payload["posts"]), 1)
 
-    def test_does_not_use_collection_counters(self):
+    def test_does_not_use_collection_counters_as_today(self):
         """Huge panel counters must never appear in today — only credit events."""
         posts = [{"id": "p1", "postNumber": 1, "serialNumber": "POST-1"}]
-        # Mimic a mistaken finance-stats row shape — must be ignored.
         junk = [
             {
                 "postSerial": "POST-1",
