@@ -86,3 +86,7 @@ PYTHONPATH=src python3 -m unittest tests.test_finance -v
 | `data/sync_state.json` | Content fingerprints, telemetry time, finance day baseline |
 | `data/last_snapshot.json` | UI snapshot |
 | `data/settings.json` | Module settings |
+
+---
+
+**Website:** [wash-pro.tech](https://wash-pro.tech) · **GitHub:** [WASH-PRO](https://github.com/WASH-PRO)
