@@ -84,3 +84,7 @@ PYTHONPATH=src python3 -m unittest tests.test_finance -v
 | `data/sync_state.json` | отпечатки, telemetry, baseline кассы за день |
 | `data/last_snapshot.json` | снимок для UI |
 | `data/settings.json` | настройки |
+
+---
+
+**Сайт:** [wash-pro.tech](https://wash-pro.tech) · **GitHub:** [WASH-PRO](https://github.com/WASH-PRO)
